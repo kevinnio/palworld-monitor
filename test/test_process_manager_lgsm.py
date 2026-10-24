@@ -9,6 +9,7 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
+import psutil
 
 from src.lifecycle.messages import ProcessIdentity
 from src.process_manager import LGSMProcessManager
@@ -174,6 +175,35 @@ class TestLGSMProcessManager:
 
 
 class TestProcessIdentityTracking:
+    @patch("src.process_manager.psutil.Process")
+    def test_zombie_identity_is_not_running(self, process, manager):
+        process.return_value.status.return_value = psutil.STATUS_ZOMBIE
+        process.return_value.is_running.return_value = True
+
+        assert manager.identity_is_running(ProcessIdentity(4242)) is False
+
+    @patch("src.process_manager.psutil.process_iter")
+    def test_scan_ignores_zombies_and_finds_a_live_replacement(
+        self, processes, manager
+    ):
+        zombie = MagicMock()
+        zombie.info = {
+            "pid": 111,
+            "name": "PalServer",
+            "status": psutil.STATUS_ZOMBIE,
+            "create_time": 1.0,
+        }
+        live = MagicMock()
+        live.info = {
+            "pid": 222,
+            "name": "PalServer",
+            "status": psutil.STATUS_RUNNING,
+            "create_time": 2.0,
+        }
+        processes.return_value = [zombie, live]
+
+        assert manager.find_process_identity("PalServer") == ProcessIdentity(222, 2.0)
+
     def test_clear_identity_is_compare_and_clear(self, manager):
         original = ProcessIdentity(111, 1.0)
         replacement = ProcessIdentity(222, 2.0)

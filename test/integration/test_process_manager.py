@@ -1,6 +1,7 @@
 """Shared process backend contracts, run against the host's native backend."""
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -132,3 +133,14 @@ def test_terminate_nonexistent_process(manager):
 
 def test_identity_is_running_with_dead_pid(manager):
     assert manager.identity_is_running(ProcessIdentity(99999999, None)) is False
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux zombie process semantics")
+def test_exited_child_is_not_running_before_it_is_reaped(manager):
+    with subprocess.Popen([sys.executable, "-c", "pass"]) as process:
+        # Observe exit without reaping so the backend sees a real zombie.
+        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+        assert psutil.Process(process.pid).status() == psutil.STATUS_ZOMBIE
+        identity = manager._identity_for_pid(process.pid)
+
+        assert manager.identity_is_running(identity) is False

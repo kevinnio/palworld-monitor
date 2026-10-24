@@ -105,6 +105,10 @@ class OSProcessManager:
                         return False
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
+
+            if process.status() == psutil.STATUS_ZOMBIE:
+                return False
+
             if process.is_running():
                 return True
             return len(process.children(recursive=True)) > 0
@@ -121,10 +125,13 @@ class OSProcessManager:
             if not target:
                 return None
             for proc in psutil.process_iter(
-                attrs=["pid", "name", "exe", "cmdline", "create_time"]
+                attrs=["pid", "name", "exe", "cmdline", "create_time", "status"]
             ):
                 try:
                     info = proc.info
+                    if info.get("status") == psutil.STATUS_ZOMBIE:
+                        continue
+
                     exe = (info.get("exe") or "").lower()
                     pname = (info.get("name") or "").lower()
                     cmdline = info.get("cmdline") or []
