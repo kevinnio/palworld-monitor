@@ -1,22 +1,25 @@
 """Verify the dummy PalServer API matches the Real PalServer contract.
 
 Starts the dummy process directly and exercises all endpoints.
-Run with: uv run poe smoke -k api
+Run with: uv run poe test test/integration/test_dummy_api.py
 """
 
+import socket
 import subprocess
 import sys
-import time
 from pathlib import Path
 
+import psutil
 import requests
 from requests.auth import HTTPBasicAuth
 
 import pytest
 
-DUMMY_SCRIPT = str(Path(__file__).resolve().parent / "dummy" / "PalServer-Dummy.py")
+from test.support import wait_until
 
-pytestmark = pytest.mark.e2e
+DUMMY_SCRIPT = str(
+    Path(__file__).resolve().parents[1] / "e2e" / "dummy" / "PalServer-Dummy.py"
+)
 
 AUTH = HTTPBasicAuth("admin", "palworld123")
 BASE = "http://127.0.0.1:8212/v1/api"
@@ -25,19 +28,49 @@ BASE = "http://127.0.0.1:8212/v1/api"
 @pytest.fixture(scope="module")
 def dummy_process():
     """Start the dummy server directly, tear it down after."""
+    with socket.socket() as listener:
+        listener.settimeout(1)
+        if listener.connect_ex(("127.0.0.1", 8212)) == 0:
+            pytest.skip("Dummy server port 8212 is already in use")
+
+    with socket.socket() as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("127.0.0.1", 8212))
+        except OSError:
+            pytest.skip("Dummy server port 8212 is already in use")
+
     proc = subprocess.Popen(
         [sys.executable, DUMMY_SCRIPT],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    time.sleep(1)
-    yield proc
+    process = psutil.Process(proc.pid)
     try:
-        if proc.poll() is None:
+
+        def ready():
+            assert proc.poll() is None, "Dummy server exited during startup"
+            try:
+                return (
+                    requests.get(f"{BASE}/info", auth=AUTH, timeout=1).status_code
+                    == 200
+                )
+            except requests.ConnectionError:
+                return False
+
+        wait_until(ready, message="Dummy API did not become ready")
+        yield proc
+    finally:
+        if process.is_running():
+            children = process.children(recursive=True)
+            for child in children:
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    pass
             proc.kill()
-            proc.wait(timeout=5)
-    except Exception:
-        pass
+            psutil.wait_procs(children, timeout=5)
+        proc.wait(timeout=5)
 
 
 def test_get_players(dummy_process):
