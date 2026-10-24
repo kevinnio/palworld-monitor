@@ -422,6 +422,27 @@ class TestPalWorldController:
         assert controller.current_server_info["playerCount"] == 0
         mock_player_manager.update_players_from_server.assert_called_once_with([])
 
+    def test_server_replaced_mid_poll_discards_stale_roster(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        """is_process_running re-acquires a replacement pid; the poll must
+        treat that as a stop too, not apply the old server's roster."""
+        pids = iter([111, 222])
+
+        def fake_running():
+            mock_process_manager.launched_pid = next(pids)
+            return True
+
+        mock_process_manager.is_process_running.side_effect = fake_running
+        mock_client.get_player_names.return_value = [["P1", "p1", "u1", "10"]]
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
+        controller._update_server_info_with_players()
+        assert controller.current_server_info["running"] is False
+        assert controller.current_server_info["playerCount"] == 0
+        mock_player_manager.update_players_from_server.assert_called_once_with([])
+
     def test_server_stopped_releases_tracked_players(
         self, mock_settings, mock_client, mock_process_manager, mock_player_manager
     ):

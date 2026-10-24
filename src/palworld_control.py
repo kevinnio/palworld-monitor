@@ -241,13 +241,16 @@ class PalWorldController:
         )
 
     def _update_server_info_with_players(self):
+        pid_at_start = self.process_manager.launched_pid
         running = self.is_palworld_process_running()
         # Server down: skip the REST call and release tracked players, who
         # would otherwise show as online forever after a stop.
         players = self.get_player_names() if running else []
-        if running and not self.is_palworld_process_running():
-            # Server died mid-poll: a pre-stop roster landing after the
-            # stop event's release would resurrect ghost players.
+        if running and (not self.is_palworld_process_running()
+                        or self.process_manager.launched_pid != pid_at_start):
+            # Server died mid-poll (or was replaced by a new process): a
+            # pre-stop roster landing after the stop event's release would
+            # resurrect ghost players.
             running = False
             players = []
         self.current_server_info["running"] = running
