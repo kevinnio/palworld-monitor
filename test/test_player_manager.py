@@ -11,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.player_manager import PlayerManager
+from src.events import EventBus
 from test.support import (
     create_temp_data_dir,
     cleanup_temp_dir,
@@ -35,7 +36,7 @@ class TestPlayerManager:
         mock_join = create_mock_path_join(data_file_path)
 
         monkeypatch.setattr("os.path.join", mock_join)
-        manager = PlayerManager()
+        manager = PlayerManager(EventBus())
         # Also set it directly to be sure
         manager.data_file = data_file_path
         return manager
@@ -125,6 +126,25 @@ class TestPlayerManager:
         assert len(offline_players) == 1
         assert offline_players[0]["steam_id"] == "111"
 
+    def test_mark_all_offline_keeps_records(self, player_manager):
+        """DOWN releases online players without forgetting who they were."""
+        player_manager.update_players_from_server(
+            [["Player1", "uid1", "111", "10"], ["Player2", "uid2", "222", "15"]]
+        )
+
+        player_manager.mark_all_offline()
+
+        assert player_manager.get_player_count() == 0
+        assert player_manager.get_total_player_count() == 2
+        assert all(
+            not player["currently_online"]
+            for player in player_manager.get_all_players()
+        )
+
+        # Idempotent: a duplicate DOWN must not fail or duplicate events.
+        player_manager.mark_all_offline()
+        assert player_manager.get_total_player_count() == 2
+
     def test_save_and_load_player_data(self, player_manager, temp_data_dir):
         """Test saving and loading player data."""
         player_manager.update_players_from_server([["Player1", "uid1", "111", "10"]])
@@ -135,7 +155,7 @@ class TestPlayerManager:
         mock_join = create_mock_path_join(data_file_path)
 
         with patch("os.path.join", mock_join):
-            new_manager = PlayerManager()
+            new_manager = PlayerManager(EventBus())
             new_manager.data_file = data_file_path
             new_manager._load_player_data()
 
@@ -172,7 +192,7 @@ class TestPlayerManager:
         mock_join = create_mock_path_join(data_file_path)
 
         monkeypatch.setattr("os.path.join", mock_join)
-        manager = PlayerManager()
+        manager = PlayerManager(EventBus())
         manager.data_file = data_file_path
         assert manager.players == {}
 
@@ -196,7 +216,7 @@ class TestPlayerManager:
 
         mock_join = create_mock_path_join(data_file)
         monkeypatch.setattr("os.path.join", mock_join)
-        manager = PlayerManager()
+        manager = PlayerManager(EventBus())
         manager.data_file = data_file
 
         # Should have migrated and saved

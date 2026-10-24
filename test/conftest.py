@@ -37,13 +37,8 @@ def temp_dir():
 
 @pytest.fixture(autouse=True)
 def cleanup_pid_files():
-    """Automatically clean up PID files and event bus subscribers after each test."""
+    """Remove PID files written by process-manager tests."""
     yield
-    # Reset event bus subscribers so stale handlers from earlier tests don't
-    # fire (and start background threads) during later tests.
-    from src.events import bus
-
-    bus._subscribers.clear()
     pid_files = [
         "palworld_server.win.pid",
         "palworld_server.linux.pid",
@@ -60,8 +55,6 @@ def cleanup_pid_files():
 @pytest.fixture
 def mock_settings(monkeypatch):
     """Shared settings fixture with all required attributes."""
-    from unittest.mock import MagicMock
-
     mock = MagicMock()
     mock.palworldServerHost = "localhost"
     mock.palworldServerPort = 8211
@@ -74,9 +67,7 @@ def mock_settings(monkeypatch):
     mock.webServerPort = 8213
     mock.webUsername = "test_admin"
     mock.webPassword = "test_web_password"
-    mock.sessionSecretKey = (
-        "test_secret_key_123456789012345678901234567890"
-    )
+    mock.sessionSecretKey = "test_secret_key_123456789012345678901234567890"
     mock.sessionTimeout = 3600
     mock.maxLoginAttempts = 5
     mock.lockoutDuration = 300
@@ -99,53 +90,9 @@ def mock_settings(monkeypatch):
     monkeypatch.setattr("src.auto_start.settings", mock)
     monkeypatch.setattr("src.player_manager.settings", mock)
     monkeypatch.setattr("src.banlist_manager.settings", mock)
+    monkeypatch.setattr("src.process_manager.settings", mock)
     monkeypatch.setattr("src.web_server.settings", mock)
     return mock
-
-
-@pytest.fixture
-def mock_process_manager():
-    """Create a mock process manager for testing."""
-    from unittest.mock import MagicMock
-
-    pm = MagicMock()
-    pm.is_process_running.return_value = False
-    pm.launched_pid = None
-    pm.launch_process.return_value = None
-    pm.terminate_process.return_value = True
-    pm.find_process_pid.return_value = None
-    pm.pid_file_name.return_value = "test.pid"
-    pm.set_known_pid.return_value = None
-    return pm
-
-
-@pytest.fixture
-def mock_player_manager():
-    """Create a mock player manager for testing."""
-    from unittest.mock import MagicMock
-
-    pm = MagicMock()
-    pm.players = {}
-    pm.get_all_players.return_value = []
-    pm.get_online_players.return_value = []
-    pm.get_offline_players.return_value = []
-    pm.get_player_count.return_value = 0
-    pm.get_total_player_count.return_value = 0
-    pm.update_players_from_server.return_value = None
-    return pm
-
-
-@pytest.fixture
-def mock_banlist_manager():
-    """Create a mock banlist manager for testing."""
-    from unittest.mock import MagicMock
-
-    bm = MagicMock()
-    bm.get_banned_players.return_value = []
-    bm.is_banned.return_value = False
-    bm.add_ban.return_value = True
-    bm.remove_ban.return_value = True
-    return bm
 
 
 @pytest.fixture
@@ -156,20 +103,25 @@ def client(web_app_factory, mock_settings):
 
 @pytest.fixture
 def web_app_factory():
+    from src.events import EventBus
     from src.web_server import WebServer
 
     controller = MagicMock()
-    controller.is_palworld_process_running.return_value = False
-    controller.get_players_for_web.return_value = []
-    controller.get_banned_players.return_value = []
-    controller.player_manager.get_online_players.return_value = []
+    controller.get_snapshot.return_value = {
+        "revision": 0,
+        "state": "STOPPED",
+        "playerData": "unknown",
+        "playerCount": 0,
+        "players": [],
+        "banned_players": [],
+    }
     controller.start_server.return_value = True
     controller.stop_server.return_value = True
     controller.kick_player.return_value = True
     controller.ban_player.return_value = True
     controller.unban_player.return_value = True
 
-    server = WebServer(controller)
+    server = WebServer(controller, bus=EventBus())
     # Ensure Flask app has a secret key for CSRF token generation in templates
     server.app.secret_key = "test_secret_key_123456789012345678901234567890"
     server.app.config["WTF_CSRF_ENABLED"] = False  # disable CSRF validation in tests
@@ -188,7 +140,7 @@ def auth_client(web_app_factory, mock_settings):
         web_app_factory: Real WebServer instance with Flask app
         mock_settings: Test credentials (username=test_admin, password=test_web_password)
 
-    Yields:
+    Returns:
         Flask test client with active session
     """
     # Create a test client and login as admin user
@@ -208,50 +160,3 @@ def auth_client(web_app_factory, mock_settings):
 
     # Return the authenticated client
     return auth_client
-
-
-@pytest.fixture
-def short_lockout_client(web_app_factory):
-    """Create a Flask test client with a very short lockout duration for testing.
-
-    This fixture creates a new WebServer instance with lockout_duration=1 second,
-    allowing lockout tests to complete quickly without waiting.
-
-    Yields:
-        Flask test client with active session and 1-second lockout
-    """
-    from src.web_server import WebServer
-
-    # Create a new app instance with short lockout
-    controller = MagicMock()
-    controller.is_palworld_process_running.return_value = False
-    controller.get_players_for_web.return_value = []
-    controller.player_manager.get_online_players.return_value = []
-    controller.start_server.return_value = True
-    controller.stop_server.return_value = True
-    controller.kick_player.return_value = True
-    controller.ban_player.return_value = True
-    controller.unban_player.return_value = True
-
-    server = WebServer.__new__(WebServer)
-    server.palworld_controller = controller
-    server.state_cache = {
-        "running": False,
-        "playerCount": 0,
-        "players": [],
-        "banned_players": [],
-    }
-    server._lock = MagicMock()
-
-    # Subscribe to events (required for proper state management)
-    from src.events import bus, Event
-
-    bus.subscribe(Event.SERVER_STARTED, server._on_server_started)
-    bus.subscribe(Event.SERVER_STOPPED, server._on_server_stopped)
-    bus.subscribe(Event.SERVER_STATUS, server._on_server_status)
-
-    # Sync initial state
-    server._sync_running_state()
-    server._sync_banned_players()
-
-    yield server.app.test_client()

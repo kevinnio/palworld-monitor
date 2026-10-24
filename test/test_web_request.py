@@ -8,7 +8,6 @@ Tests run in-process without needing an actual HTTP server or browser.
 
 import pytest
 
-
 class TestLoginPageRendering:
     """Test suite for login page rendering."""
 
@@ -173,6 +172,38 @@ class TestIndexPageRendering:
 
     """Test suite for index/dashboard page rendering."""
 
+    def test_auto_stop_notice_hidden_when_stopped(self, auth_client):
+        response = auth_client.get("/")
+
+        assert response.status_code == 200
+        assert b'id="autoStopNotice" style="margin-top: 30px; display: none;"' in (
+            response.data
+        )
+
+    def test_auto_stop_notice_visible_when_running(
+        self, auth_client, web_app_factory
+    ):
+        snapshot = dict(
+            web_app_factory.palworld_controller.get_snapshot.return_value
+        )
+        snapshot["state"] = "RUNNING"
+        web_app_factory.palworld_controller.get_snapshot.return_value = snapshot
+
+        response = auth_client.get("/")
+
+        assert response.status_code == 200
+        assert b'id="autoStopNotice" style="margin-top: 30px;"' in response.data
+
+    def test_auto_stop_notice_absent_when_auto_stop_disabled(
+        self, auth_client, mock_settings, monkeypatch
+    ):
+        monkeypatch.setattr(mock_settings, "autoStop", False)
+
+        response = auth_client.get("/")
+
+        assert response.status_code == 200
+        assert b'id="autoStopNotice"' not in response.data
+
     def test_index_page_renders_when_logged_in(self, auth_client):
         """GET / renders the dashboard with player data when authenticated."""
         response = auth_client.get("/")
@@ -208,11 +239,13 @@ class TestStatusUpdatePolling:
         )
 
         assert response.status_code == 200
-        # Should return JSON with expected keys
+        # Should return the committed lifecycle + REST health snapshot
         import json
 
         data = json.loads(response.data)
-        assert "data" in data or "running" in str(data).lower()
+        assert "data" in data
+        assert data["data"]["state"] in ("STOPPED", "STARTING", "RUNNING", "STOPPING")
+        assert data["data"]["playerData"] in ("unknown", "ok", "unavailable")
 
 
 class TestServerStartStopActions:

@@ -60,30 +60,23 @@ class RestClient:
             return False
 
     def get_player_count(self):
-        try:
-            players_data = self._make_get_request("players")
-            if not players_data:
-                return 0
-            players = players_data.get("players", []) if isinstance(players_data, dict) else []
-            return len(players)
-        except Exception as e:
-            logging.error(f"Error getting player count: {e}")
-            return 0
+        players = self.get_player_names()
+        return len(players) if players is not None else None
 
     def get_player_names(self):
         try:
             players_data = self._make_get_request("players")
-            if not players_data:
-                return []
+            if players_data is None:
+                return None
             if isinstance(players_data, dict):
                 players_data = players_data.get("players", [])
             if not isinstance(players_data, list):
-                return []
+                return None
             keys = ("name", "playerId", "userId", "level")
             return [[str(p.get(k, "Unknown")) for k in keys] for p in players_data]
         except Exception as e:
             logging.error(f"Error getting player names: {e}")
-            return []
+            return None
 
     def kick_player(self, player):
         return self._make_post_request("kick", {"userid": _extract_steam_id(player)})

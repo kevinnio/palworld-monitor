@@ -11,301 +11,268 @@
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
 
+"""Single-writer lifecycle supervisor for the Palworld server.
+
+Workers do blocking I/O (process scans, REST calls, launches, terminations)
+and submit observations to one queue. The supervisor is the only writer of
+lifecycle, roster and auto-stop state; it commits a transition and only then
+publishes the corresponding notification.
+"""
+
 import logging
-import time
+import queue
 import threading
-from src.settings import settings
-from src.player_manager import PlayerManager
+import time
+from dataclasses import dataclass
+from typing import Optional
+
 from src.banlist_manager import BanlistManager
-from src.events import bus, Event
-import os
-import platform
+from src.events import EventBus, Event
+from src.player_manager import PlayerManager
+from src.process_manager import ProcessIdentity, ProcessSnapshot
+from src.settings import settings
+
+
+class LifecycleState:
+    STOPPED = "STOPPED"
+    STARTING = "STARTING"
+    RUNNING = "RUNNING"
+    STOPPING = "STOPPING"
+
+
+AUTO_STOP_STARTUP_GUARD = 30
+
+
+@dataclass(frozen=True)
+class ProcessObservation:
+    """A process scan tagged with the generation it started under."""
+
+    generation: int
+    snapshot: ProcessSnapshot
+
+
+@dataclass(frozen=True)
+class LaunchRequest:
+    generation: int
+
+
+@dataclass(frozen=True)
+class LaunchResult:
+    generation: int
+    identity: Optional[ProcessIdentity]
+
+
+@dataclass(frozen=True)
+class PollRequest:
+    generation: int
+    identity: ProcessIdentity
+    seq: int
+
+
+@dataclass(frozen=True)
+class RosterSample:
+    generation: int
+    identity: ProcessIdentity
+    seq: int
+    players: Optional[list]  # None means the REST API was unavailable.
+
+
+@dataclass(frozen=True)
+class StopRequest:
+    generation: int
+    identity: ProcessIdentity
+
+
+@dataclass(frozen=True)
+class StopResult:
+    generation: int
+    identity: Optional[ProcessIdentity]
+    stopped: Optional[bool]  # True=gone, False=failed, None=pending shutdown
+
+
+@dataclass(frozen=True)
+class ProcessExit:
+    identity: ProcessIdentity
+
+
+class _Command:
+    def __init__(self):
+        self.done = threading.Event()
+        self.result = False
+
+
+class _StartCommand(_Command):
+    pass
+
+
+class _StopCommand(_Command):
+    pass
+
+
+_SHUTDOWN = object()
+_WORKER_JOIN_TIMEOUT = 5
 
 
 class PalWorldController:
     def __init__(
-        self, client, process_manager=None, player_manager=None, banlist_manager=None
+        self,
+        client,
+        process_manager,
+        player_manager: PlayerManager,
+        banlist_manager: BanlistManager,
+        bus: EventBus,
+        clock=None,
     ):
         self.client = client
-        self.player_manager = (
-            player_manager if player_manager is not None else PlayerManager()
-        )
-        self.banlist_manager = (
-            banlist_manager if banlist_manager is not None else BanlistManager()
-        )
+        self.process_manager = process_manager
+        self.player_manager = player_manager
+        self.banlist_manager = banlist_manager
+        self.bus = bus
+        self._clock = clock or time.monotonic
 
-        if process_manager is not None:
-            self.process_manager = process_manager
-        else:
-            self.process_manager = self._create_process_manager()
-
-        self.current_server_info = {"running": False, "playerCount": 0, "players": []}
-        self.is_palworld_server_starting = False
         self.server_starting_cooldown = 5
-        self.last_server_started_time = 0
         self.server_stopping_cooldown = 5
-        self.last_server_stopped_time = 0
+        self.poll_interval = settings.pollingRate
+        self.last_server_started_time = 0.0
+        self.last_server_stopped_time = 0.0
 
-        self._auto_mode_cancelled = False
-        self.update_thread = None
-        self.update_thread_stop_event = threading.Event()
-        self.auto_stop_delay_thread = None
+        self._state = LifecycleState.STOPPED
+        self._identity: Optional[ProcessIdentity] = None
+        self._generation = 0
+        self._revision = 0
+        self._state_lock = threading.RLock()
+        self._player_data = "unknown"  # unknown | ok | unavailable
+        self._stopped_reconciled = False
 
-        self._detection_thread = None
-        self._detection_stop_event = threading.Event()
+        self._auto_stop_deadline: Optional[float] = None
+        self._auto_stop_generation: Optional[int] = None
+        self._auto_stop_revalidation: Optional[int] = None
+        self._auto_stop_revalidation_seq: Optional[int] = None
+        self._last_valid_sample_at: Optional[float] = None
+        self._last_valid_sample_generation: Optional[int] = None
+        self._last_valid_roster_empty = False
+        self._poll_due_at: Optional[float] = None
+        self._poll_inflight = False
+        self._poll_seq = 0
 
-        self._setup_subscriptions()
-        self._detect_existing_server_process()
-        # Watch the process for the whole session: pick up one that starts
-        # later, and notice when a tracked one disappears on its own.
-        self._start_detection_loop()
+        self._observations: queue.Queue = queue.Queue()
+        self._poll_requests: queue.Queue = queue.Queue()
+        self._launch_requests: queue.Queue = queue.Queue()
+        self._stop_requests: queue.Queue = queue.Queue()
 
-    def _create_process_manager(self):
-        detected_os = platform.system()
-        if detected_os.lower() == "linux":
-            if getattr(settings, "useLGSM", False):
-                from src.process_manager import LGSMProcessManager
+        self._closing = threading.Event()
+        self._started = False
+        self._start_lock = threading.Lock()
+        self._threads: dict[str, threading.Thread] = {}
 
-                return LGSMProcessManager()
-            from src.process_manager import LinuxProcessManager
+        set_callback = getattr(self.process_manager, "set_exit_callback", None)
+        if set_callback is not None:
+            set_callback(self._on_process_exit)
 
-            return LinuxProcessManager()
-        else:
-            from src.process_manager import WindowsProcessManager
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
-            return WindowsProcessManager()
+    def start(self):
+        """Start the supervisor and its workers. Idempotent."""
+        with self._start_lock:
+            if self._started:
+                return
+            self._started = True
+            self._closing.clear()
+            self._threads = {
+                "palworld-lifecycle": threading.Thread(
+                    target=self._supervisor_loop,
+                    name="palworld-lifecycle",
+                    daemon=True,
+                ),
+                "palworld-detection": threading.Thread(
+                    target=self._detection_worker,
+                    name="palworld-detection",
+                    daemon=True,
+                ),
+                "palworld-poll": threading.Thread(
+                    target=self._poll_worker, name="palworld-poll", daemon=True
+                ),
+                "palworld-launch": threading.Thread(
+                    target=self._launch_worker, name="palworld-launch", daemon=True
+                ),
+                "palworld-stop": threading.Thread(
+                    target=self._stop_worker, name="palworld-stop", daemon=True
+                ),
+            }
+            for thread in self._threads.values():
+                thread.start()
 
-    def _setup_subscriptions(self):
-        bus.subscribe(Event.SERVER_STARTED, self._on_server_started)
-        bus.subscribe(Event.SERVER_STOPPED, self._on_server_stopped)
-        bus.subscribe(Event.SERVER_STATUS, self._on_server_status)
+    def close(self):
+        """Stop the workers and release process resources. Idempotent."""
+        with self._start_lock:
+            if not self._started:
+                return
+            self._started = False
+            self._closing.set()
+            self._observations.put(_SHUTDOWN)
+            for requests in (
+                self._poll_requests,
+                self._launch_requests,
+                self._stop_requests,
+            ):
+                requests.put(None)
+            threads = list(self._threads.values())
 
-    def _on_server_started(self, data):
-        self.last_server_started_time = time.time()
-        self.is_palworld_server_starting = False
-        logging.debug(
-            f"Controller: Server started event received (PID: {data.get('pid')})"
-        )
-        self.start_server_info_update_thread()
+        for thread in threads:
+            if thread is threading.current_thread():
+                continue
+            thread.join(timeout=_WORKER_JOIN_TIMEOUT)
+            if thread.is_alive():
+                logging.warning(f"Thread {thread.name} did not stop in time")
 
-    def _on_server_stopped(self, data):
-        self.last_server_stopped_time = time.time()
-        logging.debug("Controller: Server stopped event received")
-        self.stop_server_info_update_thread()
-        # Release tracked players here, not only on the next poll: the poll
-        # thread stops with the event, so otherwise players would stay
-        # "online" in PlayerManager (and on disk) after a stop.
-        if settings.enablePlayerTracking:
-            self.player_manager.update_players_from_server([])
-        self._start_detection_loop()
-
-    def _on_server_status(self, data):
-        self.current_server_info["running"] = data.get("running", False)
-        self.current_server_info["playerCount"] = data.get("playerCount", 0)
-        self.current_server_info["players"] = data.get("players", [])
-        if settings.autoStop and data.get("playerCount", 0) == 0:
-            self._handle_auto_stop_condition()
-        else:
-            self._cancel_auto_stop_delay()
-
-    def is_palworld_process_running(self):
-        return self.process_manager.is_process_running()
+        close_process_manager = getattr(self.process_manager, "close", None)
+        if close_process_manager is not None:
+            close_process_manager()
 
     def start_server(self):
         logging.info("Palworld server start command received")
-        current_time = time.time()
-        if self._should_block_start(current_time):
-            return False
-        self.is_palworld_server_starting = True
-        try:
-            bus.publish(
-                Event.CMD_START_SERVER,
-                {
-                    "exe_path": settings.palworldServerExePath,
-                    "exe_args": settings.palworldExeArguments,
-                },
-            )
-            # SERVER_STARTED fires synchronously during the publish above and
-            # resets is_palworld_server_starting to False on a successful launch.
-            return True
-        except Exception as e:
-            logging.error(f"Error issuing start command: {e}")
-            self.is_palworld_server_starting = False
-            return False
-
-    def _should_block_start(self, current_time):
-        if self.is_palworld_process_running():
-            logging.warning(
-                "The attempt to start the Palworld server was made, but it is already running."
-            )
-            return True
-        if self.is_palworld_server_starting:
-            logging.warning("Palworld Server is already starting.")
-            return True
-        if current_time - self.last_server_started_time < self.server_starting_cooldown:
-            logging.warning("Tried to start the server too quickly multiple times.")
-            return True
-        if current_time - self.last_server_stopped_time < self.server_stopping_cooldown:
-            logging.warning(
-                "You attempted to restart the server too Quickly after trying to stop it."
-            )
-            return True
-        return False
-
-    def _detect_existing_server_process(self):
-        try:
-            if not self.process_manager.launched_pid and not os.path.exists(
-                self.process_manager.pid_file_name()
-            ):
-                pid = self.process_manager.find_process_pid("PalServer")
-                if pid:
-                    bus.publish(Event.SERVER_STARTED, {"pid": pid})
-                    self.process_manager.set_known_pid(pid)
-        except Exception:
-            pass
-
-    def _start_detection_loop(self):
-        """Start a background thread that polls for a PalServer process every 5 s."""
-        if self._detection_thread and self._detection_thread.is_alive():
-            return
-        self._detection_stop_event.clear()
-        self._detection_thread = threading.Thread(
-            target=self._server_detection_loop, daemon=True
-        )
-        self._detection_thread.start()
-
-    def _server_detection_loop(self):
-        """Watch the PalServer process: emit SERVER_STARTED when one appears
-        outside our control and SERVER_STOPPED when a tracked one goes away."""
-        try:
-            while not self._detection_stop_event.is_set():
-                self._check_tracked_process_gone()
-                self._detect_existing_server_process()
-                self._detection_stop_event.wait(settings.pollingRate)
-        except Exception:
-            logging.exception("Server detection loop failed")
-
-    def _check_tracked_process_gone(self):
-        """Fire SERVER_STOPPED once if the tracked process exited uncleanly.
-
-        Without this, a server that dies outside the monitor (crash, closed
-        window, LGSM cron stop) is never reported stopped: the status poll
-        loop keeps hammering a dead REST API and the auto-start listener,
-        which only re-arms on SERVER_STOPPED, never comes back.
-        """
-        if not self.process_manager.launched_pid:
-            return
-        if self.process_manager.is_process_running():
-            return
-        self.process_manager.clear_pid()
-        logging.info("Tracked PalServer process is gone; emitting SERVER_STOPPED")
-        bus.publish(Event.SERVER_STOPPED, {"pid": None})
+        return self._submit_command(_StartCommand())
 
     def stop_server(self):
         logging.info("Palworld server stop command received")
-        if self._should_block_stop():
-            return False
-        self._cancel_auto_stop_delay()
-        try:
-            bus.publish(Event.CMD_STOP_SERVER, {})
-            return True
-        except Exception as e:
-            logging.error(f"Error issuing stop command: {e}")
-            return False
+        return self._submit_command(_StopCommand())
 
-    def _should_block_stop(self):
-        if not self.is_palworld_process_running():
-            logging.warning(
-                "An attempt to stop the Palworld server was made, but it was not running."
-            )
-            return True
-        current_time = time.time()
-        if current_time - self.last_server_stopped_time < self.server_stopping_cooldown:
-            logging.warning(
-                "You attempted to restart the server too Quickly after trying to stop it."
-            )
-            return True
-        return False
+    @property
+    def generation(self) -> int:
+        with self._state_lock:
+            return self._generation
 
-    def _update_server_status(self):
-        """Poll server and emit SERVER_STATUS event."""
-        self._update_server_info_with_players()
-        bus.publish(
-            Event.SERVER_STATUS,
-            {
-                "running": self.current_server_info["running"],
-                "playerCount": self.current_server_info["playerCount"],
-                "players": list(self.current_server_info["players"]),
+    @property
+    def state(self) -> str:
+        with self._state_lock:
+            return self._state
+
+    def get_snapshot(self) -> dict:
+        """One consistent view of lifecycle, roster and REST health."""
+        with self._state_lock:
+            players = self.player_manager.get_all_players()
+            return {
+                "revision": self._revision,
+                "state": self._state,
+                "playerData": self._player_data,
+                "playerCount": sum(
+                    1 for player in players if player.get("currently_online")
+                ),
+                "players": players,
                 "banned_players": list(self.banlist_manager.get_banned_players()),
-            },
-        )
+            }
 
-    def _update_server_info_with_players(self):
-        pid_at_start = self.process_manager.launched_pid
-        running = self.is_palworld_process_running()
-        # Server down: skip the REST call and release tracked players, who
-        # would otherwise show as online forever after a stop.
-        players = self.get_player_names() if running else []
-        if running and (
-            not self.is_palworld_process_running()
-            or self.process_manager.launched_pid != pid_at_start
-        ):
-            # Server died mid-poll (or was replaced by a new process): a
-            # pre-stop roster landing after the stop event's release would
-            # resurrect ghost players.
-            running = False
-            players = []
-        self.current_server_info["running"] = running
-        self.current_server_info["playerCount"] = len(players)
-        self.current_server_info["players"] = players
-        if settings.enablePlayerTracking:
-            self.player_manager.update_players_from_server(players)
+    def get_banned_players(self):
+        return self.banlist_manager.get_banned_players()
 
-    def _handle_auto_stop_condition(self):
-        if not self.current_server_info["running"]:
-            return
-        if self.auto_stop_delay_thread and self.auto_stop_delay_thread.is_alive():
-            return
-        if time.time() - self.last_server_started_time < 30:
-            remaining = 30 - (time.time() - self.last_server_started_time)
-            logging.debug(f"Auto-stop startup guard active, {remaining:.0f}s remaining")
-            return
-        logging.info("Auto-stop condition met, starting delay thread")
-        self._auto_mode_cancelled = False
-        self.auto_stop_delay_thread = threading.Thread(
-            target=self._auto_stop_delay_worker, daemon=True
-        )
-        self.auto_stop_delay_thread.start()
-
-    def _cancel_auto_stop_delay(self):
-        if self.auto_stop_delay_thread and self.auto_stop_delay_thread.is_alive():
-            logging.debug("Auto-stop cancelled (players detected)")
-            self._auto_mode_cancelled = True
-
-    def _auto_stop_delay_worker(self):
-        logging.info(f"Auto-stop delay started, stopping in {settings.autoStopDelay}s")
-        time.sleep(settings.autoStopDelay)
-        if self._auto_mode_cancelled:
-            logging.debug("Auto-stop cancelled during sleep")
-            return
-        logging.info("Auto-stop delay elapsed, stopping server")
-        self.stop_server()
-
-    def get_player_count(self):
-        return self.client.get_player_count()
-
-    def get_player_names(self):
-        return self.client.get_player_names()
-
-    def get_players_for_web(self):
-        return self.player_manager.get_all_players()
+    def is_player_banned(self, steam_id):
+        return self.banlist_manager.is_banned(steam_id)
 
     def kick_player(self, steam_id):
         try:
-            success = self.client.kick_player({"steam_id": steam_id})
-            if success:
-                bus.publish(Event.CMD_KICK_PLAYER, {"steam_id": steam_id})
-            return success
+            return self.client.kick_player({"steam_id": steam_id})
         except Exception as e:
             logging.error(f"Error kicking {steam_id}: {e}")
             return False
@@ -332,35 +299,586 @@ class PalWorldController:
             logging.error(f"Error unbanning {steam_id}: {e}")
             return False
 
-    def get_banned_players(self):
-        return self.banlist_manager.get_banned_players()
+    # ------------------------------------------------------------------
+    # Supervisor loop
+    # ------------------------------------------------------------------
 
-    def is_player_banned(self, steam_id):
-        return self.banlist_manager.is_banned(steam_id)
+    def _submit_command(self, command: _Command) -> bool:
+        if not self._started or self._closing.is_set():
+            logging.warning("Controller is not running; command ignored")
+            return False
+        self._observations.put(command)
+        if not command.done.wait(timeout=5):
+            logging.error("Lifecycle command timed out")
+            return False
+        return command.result
 
-    def start_server_info_update_thread(self):
-        if self.update_thread is threading.current_thread():
-            # Announced from the poll loop itself (server adopted mid-poll):
-            # keep this loop alive instead of failing to spawn a second one.
-            self.update_thread_stop_event.clear()
-            return
-        if not (self.update_thread and self.update_thread.is_alive()):
-            self.update_thread_stop_event.clear()
-            self.update_thread = threading.Thread(
-                target=self._server_info_update_loop, daemon=True
-            )
-            self.update_thread.start()
-
-    def stop_server_info_update_thread(self):
-        if self.update_thread and self.update_thread.is_alive():
-            self.update_thread_stop_event.set()
-            self.update_thread.join(timeout=5)
-
-    def _server_info_update_loop(self):
-        while not self.update_thread_stop_event.is_set():
+    def _supervisor_loop(self):
+        while not self._closing.is_set():
+            timeout = self._next_timeout()
             try:
-                self._update_server_status()
-            except Exception as e:
-                logging.error(f"Update loop error: {e}")
-            if self.update_thread_stop_event.wait(settings.pollingRate):
+                item = self._observations.get(timeout=timeout)
+            except queue.Empty:
+                self._on_tick()
+                continue
+            if item is _SHUTDOWN:
                 break
+            try:
+                self._handle(item)
+            except Exception:
+                logging.exception(
+                    "Lifecycle supervisor failed to handle an observation"
+                )
+
+    def _next_timeout(self) -> Optional[float]:
+        now = self._clock()
+        with self._state_lock:
+            if self._state != LifecycleState.RUNNING:
+                return None
+            deadlines = []
+            if self._poll_due_at is not None and not self._poll_inflight:
+                deadlines.append(self._poll_due_at)
+            if self._auto_stop_deadline is not None:
+                deadlines.append(self._auto_stop_deadline)
+        if not deadlines:
+            return None
+        return max(0.0, min(deadlines) - now)
+
+    def _on_tick(self):
+        now = self._clock()
+        with self._state_lock:
+            state = self._state
+            generation = self._generation
+            identity = self._identity
+            poll_due = self._poll_due_at
+            auto_stop_due = self._auto_stop_deadline
+            should_poll = (
+                state == LifecycleState.RUNNING
+                and identity is not None
+                and not self._poll_inflight
+                and poll_due is not None
+                and now >= poll_due
+            )
+            if should_poll:
+                self._poll_inflight = True
+                self._poll_due_at = None
+                self._poll_seq += 1
+                seq = self._poll_seq
+        if should_poll:
+            self._poll_requests.put(PollRequest(generation, identity, seq))
+        if auto_stop_due is not None and now >= auto_stop_due:
+            self._expire_auto_stop(generation)
+
+    def _handle(self, item):
+        if isinstance(item, _StartCommand):
+            self._handle_start_command(item)
+        elif isinstance(item, _StopCommand):
+            self._handle_stop_command(item)
+        elif isinstance(item, LaunchResult):
+            self._handle_launch_result(item)
+        elif isinstance(item, StopResult):
+            self._handle_stop_result(item)
+        elif isinstance(item, ProcessExit):
+            self._handle_process_exit(item)
+        elif isinstance(item, ProcessObservation):
+            self._handle_process_observation(item)
+        elif isinstance(item, RosterSample):
+            self._handle_roster_sample(item)
+        else:
+            logging.warning(f"Ignoring unknown lifecycle observation: {item!r}")
+
+    def _has_live_tracked_process(self) -> bool:
+        tracked = self.process_manager.tracked_identity
+        if tracked is not None and self.process_manager.identity_is_running(tracked):
+            return True
+        # No live tracked identity is not proof that no server exists: the
+        # first detection scan may not have adopted it yet.
+        if self.process_manager.find_process_identity("PalServer") is not None:
+            return True
+        if tracked is not None:
+            self.process_manager.clear_identity(tracked)
+        return False
+
+    def _handle_start_command(self, command: _StartCommand):
+        generation = None
+        with self._state_lock:
+            if self._state != LifecycleState.STOPPED:
+                logging.warning("Palworld Server is already running or starting.")
+                command.result = False
+            elif self._has_live_tracked_process():
+                logging.warning("A Palworld server process is already tracked.")
+                command.result = False
+            elif self._clock() - self.last_server_started_time < (
+                self.server_starting_cooldown
+            ):
+                logging.warning("Tried to start the server too quickly multiple times.")
+                command.result = False
+            elif self._clock() - self.last_server_stopped_time < (
+                self.server_stopping_cooldown
+            ):
+                logging.warning(
+                    "You attempted to restart the server too quickly after stopping it."
+                )
+                command.result = False
+            else:
+                self._generation += 1
+                generation = self._generation
+                self._state = LifecycleState.STARTING
+                self._identity = None
+                self._player_data = "unknown"
+                self._cancel_auto_stop_locked()
+                self._poll_due_at = None
+                self._poll_inflight = False
+                command.result = True
+        # The command is accepted before the listener is asked to release the
+        # port, so the auto-start thread never waits on this command.
+        command.done.set()
+        if generation is not None:
+            self._publish_lifecycle(LifecycleState.STARTING, generation)
+            self._launch_requests.put(LaunchRequest(generation))
+
+    def _handle_stop_command(self, command: _StopCommand):
+        generation = None
+        with self._state_lock:
+            if self._state != LifecycleState.RUNNING:
+                logging.warning(
+                    "An attempt to stop the Palworld server was made, but it was not running."
+                )
+                command.result = False
+            elif self._clock() - self.last_server_stopped_time < (
+                self.server_stopping_cooldown
+            ):
+                logging.warning(
+                    "You attempted to restart the server too quickly after stopping it."
+                )
+                command.result = False
+            else:
+                command.result = self._begin_stop_locked()
+                if command.result:
+                    generation = self._generation
+        if generation is not None:
+            self._publish_lifecycle(LifecycleState.STOPPING, generation)
+        command.done.set()
+
+    def _begin_stop_locked(self) -> bool:
+        identity = self._identity
+        if identity is None:
+            return False
+        self._state = LifecycleState.STOPPING
+        self._cancel_auto_stop_locked()
+        self._poll_due_at = None
+        self._poll_inflight = False
+        self._stop_requests.put(StopRequest(self._generation, identity))
+        return True
+
+    def _handle_launch_result(self, result: LaunchResult):
+        with self._state_lock:
+            if (
+                result.generation != self._generation
+                or self._state != LifecycleState.STARTING
+            ):
+                return
+        if result.identity is None:
+            self._commit_down()
+        else:
+            self._commit_started(result.identity)
+
+    def _handle_stop_result(self, result: StopResult):
+        with self._state_lock:
+            if (
+                result.generation != self._generation
+                or self._state != LifecycleState.STOPPING
+            ):
+                return
+            outcome = result.stopped
+        if outcome is True:
+            self._commit_down()
+        elif outcome is False:
+            self._recover_from_failed_stop()
+        # None means the process manager is still watching an asynchronous
+        # shutdown (LGSM); stay STOPPING until it reports an exit.
+
+    def _recover_from_failed_stop(self):
+        with self._state_lock:
+            if self._state != LifecycleState.STOPPING:
+                return
+            self._state = LifecycleState.RUNNING
+            self._poll_due_at = self._clock()
+            self._poll_inflight = False
+            generation = self._generation
+        logging.warning("Stop failed while the process is still alive; resuming polling")
+        self._publish_lifecycle(LifecycleState.RUNNING, generation)
+
+    def _handle_process_exit(self, observation: ProcessExit):
+        with self._state_lock:
+            if self._identity is None or not self._identity.matches(
+                observation.identity
+            ):
+                return
+            if self._state not in (LifecycleState.RUNNING, LifecycleState.STOPPING):
+                return
+        self._commit_down()
+
+    def _handle_process_observation(self, observation: ProcessObservation):
+        with self._state_lock:
+            if observation.generation != self._generation:
+                return
+        self._handle_process_snapshot(observation.snapshot)
+
+    def _handle_process_snapshot(self, snapshot: ProcessSnapshot):
+        replacement = None
+        stale_tracking = None
+        reconcile = False
+        with self._state_lock:
+            state = self._state
+            current = self._identity
+            if state == LifecycleState.STARTING:
+                return
+            if state == LifecycleState.STOPPED:
+                if snapshot.tracked is not None:
+                    if (
+                        snapshot.found is not None
+                        and snapshot.found.matches(snapshot.tracked)
+                    ):
+                        # Only adopt a tracked PID when this scan actually
+                        # found it as PalServer; mere PID liveness is not proof.
+                        replacement = snapshot.tracked
+                    else:
+                        stale_tracking = snapshot.tracked
+                if replacement is None and snapshot.found is not None:
+                    replacement = snapshot.found
+                if replacement is None and not self._stopped_reconciled:
+                    reconcile = True
+            else:
+                if current is None:
+                    return
+                if snapshot.tracked is None or not snapshot.tracked.matches(current):
+                    return  # stale observation from an older generation
+                if snapshot.tracked_running:
+                    return
+                if snapshot.found is not None and not snapshot.found.matches(current):
+                    replacement = snapshot.found
+        if stale_tracking is not None:
+            self.process_manager.clear_identity(stale_tracking)
+        if state == LifecycleState.STOPPED:
+            if replacement is not None:
+                self._adopt(replacement)
+            elif reconcile:
+                self._reconcile_stopped()
+            return
+        self._commit_down()
+        if replacement is not None:
+            self._adopt(replacement)
+
+    def _adopt(self, identity: ProcessIdentity):
+        self.process_manager.set_known_identity(identity)
+        self._commit_started(identity)
+
+    def _handle_roster_sample(self, sample: RosterSample):
+        stop_now = False
+        with self._state_lock:
+            if sample.generation != self._generation:
+                return  # late response from a previous generation
+            if self._state != LifecycleState.RUNNING:
+                return
+            if self._identity is None or not self._identity.matches(sample.identity):
+                return
+            self._poll_inflight = False
+            self._poll_due_at = self._clock() + self.poll_interval
+            generation = self._generation
+            revalidating = self._auto_stop_revalidation == generation
+            if sample.players is None:
+                # REST is unknown/unavailable: keep the last-known roster and
+                # never let an empty-looking failure trigger auto-stop.
+                self._player_data = "unavailable"
+                self._last_valid_sample_at = None
+                self._last_valid_sample_generation = None
+                self._last_valid_roster_empty = False
+                self._cancel_auto_stop_locked()
+            else:
+                players = list(sample.players)
+                self._player_data = "ok"
+                self.player_manager.update_players_from_server(players)
+                self._last_valid_sample_at = self._clock()
+                self._last_valid_sample_generation = generation
+                self._last_valid_roster_empty = not players
+                if revalidating:
+                    if players:
+                        self._cancel_auto_stop_locked()
+                    elif sample.seq >= (self._auto_stop_revalidation_seq or 0):
+                        self._auto_stop_revalidation = None
+                        self._auto_stop_revalidation_seq = None
+                        stop_now = True
+                    else:
+                        # A poll captured before the revalidation request
+                        # cannot confirm it; ask for a newer sample.
+                        self._poll_due_at = self._clock()
+                else:
+                    self._update_auto_stop_locked(len(players))
+            banned_players = list(self.banlist_manager.get_banned_players())
+            players_snapshot = self.player_manager.get_all_players()
+            player_count = sum(
+                1 for player in players_snapshot if player.get("currently_online")
+            )
+            player_data = self._player_data
+            revision = self._bump_revision_locked()
+        self.bus.publish(
+            Event.SERVER_STATUS,
+            {
+                "revision": revision,
+                "state": LifecycleState.RUNNING,
+                "playerData": player_data,
+                "playerCount": player_count,
+                "banned_players": banned_players,
+                "generation": generation,
+            },
+        )
+        if stop_now:
+            self._begin_stop()
+
+    # ------------------------------------------------------------------
+    # State commits (supervisor only)
+    # ------------------------------------------------------------------
+
+    def _bump_revision_locked(self) -> int:
+        # Monotonic revision for ordered web/SSE snapshots.
+        self._revision += 1
+        return self._revision
+
+    def _publish_lifecycle(self, state: str, generation: int):
+        with self._state_lock:
+            revision = self._bump_revision_locked()
+        self.bus.publish(
+            Event.LIFECYCLE_CHANGED,
+            {"state": state, "generation": generation, "revision": revision},
+        )
+
+    def _reconcile_stopped(self):
+        """Make the persisted roster consistent with a stopped server."""
+        with self._state_lock:
+            if self._state != LifecycleState.STOPPED or self._stopped_reconciled:
+                return
+            self.player_manager.mark_all_offline()
+            self._stopped_reconciled = True
+            revision = self._bump_revision_locked()
+            generation = self._generation
+            players = self.player_manager.get_all_players()
+            player_count = sum(
+                1 for player in players if player.get("currently_online")
+            )
+            player_data = self._player_data
+            banned_players = list(self.banlist_manager.get_banned_players())
+        self.bus.publish(
+            Event.SERVER_STATUS,
+            {
+                "revision": revision,
+                "state": LifecycleState.STOPPED,
+                "playerData": player_data,
+                "playerCount": player_count,
+                "banned_players": banned_players,
+                "generation": generation,
+            },
+        )
+
+    def _commit_started(self, identity: ProcessIdentity):
+        with self._state_lock:
+            if self._state != LifecycleState.STARTING:
+                self._generation += 1
+            self._state = LifecycleState.RUNNING
+            self._identity = identity
+            self._player_data = "unknown"
+            self._stopped_reconciled = False
+            self._last_valid_sample_at = None
+            self._last_valid_sample_generation = None
+            self._last_valid_roster_empty = False
+            self.last_server_started_time = self._clock()
+            self._cancel_auto_stop_locked()
+            self._poll_due_at = self._clock()
+            self._poll_inflight = False
+            generation = self._generation
+            revision = self._bump_revision_locked()
+        self.bus.publish(
+            Event.SERVER_STARTED,
+            {
+                "revision": revision,
+                "pid": identity.pid,
+                "generation": generation,
+                "state": LifecycleState.RUNNING,
+            },
+        )
+
+    def _commit_down(self):
+        with self._state_lock:
+            stopped = self._identity
+            self._state = LifecycleState.STOPPED
+            self._identity = None
+            self._generation += 1
+            self._player_data = "unknown"
+            self._stopped_reconciled = True
+            self._last_valid_sample_at = None
+            self._last_valid_sample_generation = None
+            self._last_valid_roster_empty = False
+            self.last_server_stopped_time = self._clock()
+            self._cancel_auto_stop_locked()
+            self._poll_due_at = None
+            self._poll_inflight = False
+            self.player_manager.mark_all_offline()
+            generation = self._generation
+            revision = self._bump_revision_locked()
+        if stopped is not None:
+            self.process_manager.clear_identity(stopped)
+        self.bus.publish(
+            Event.SERVER_STOPPED,
+            {
+                "revision": revision,
+                "pid": stopped.pid if stopped is not None else None,
+                "generation": generation,
+                "state": LifecycleState.STOPPED,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Auto-stop deadline (supervisor owned)
+    # ------------------------------------------------------------------
+
+    def _cancel_auto_stop_locked(self):
+        self._auto_stop_deadline = None
+        self._auto_stop_generation = None
+        self._auto_stop_revalidation = None
+        self._auto_stop_revalidation_seq = None
+
+    def _update_auto_stop_locked(self, player_count: int):
+        if not settings.autoStop or player_count > 0:
+            self._cancel_auto_stop_locked()
+            return
+        now = self._clock()
+        if now - self.last_server_started_time < AUTO_STOP_STARTUP_GUARD:
+            self._cancel_auto_stop_locked()
+            return
+        if (
+            self._auto_stop_deadline is None
+            or self._auto_stop_generation != self._generation
+        ):
+            self._auto_stop_deadline = now + settings.autoStopDelay
+            self._auto_stop_generation = self._generation
+            logging.info(
+                f"Auto-stop armed, stopping in {settings.autoStopDelay}s if still empty"
+            )
+
+    def _sample_staleness_limit(self) -> float:
+        return max(self.poll_interval * 2, 1.0)
+
+    def _has_fresh_empty_sample_locked(self, generation: int, now: float) -> bool:
+        return (
+            self._last_valid_sample_generation == generation
+            and self._last_valid_sample_at is not None
+            and now - self._last_valid_sample_at <= self._sample_staleness_limit()
+            and self._last_valid_roster_empty
+            and not self._poll_inflight
+            and (self._poll_due_at is None or self._poll_due_at > now)
+        )
+
+    def _expire_auto_stop(self, generation: int):
+        stop_now = False
+        request_sample = False
+        with self._state_lock:
+            if (
+                self._state != LifecycleState.RUNNING
+                or self._generation != generation
+                or self._auto_stop_generation != generation
+            ):
+                self._cancel_auto_stop_locked()
+                return
+            if self._auto_stop_revalidation == generation:
+                return
+            now = self._clock()
+            if self._has_fresh_empty_sample_locked(generation, now):
+                self._auto_stop_deadline = None
+                self._auto_stop_generation = None
+                stop_now = True
+            else:
+                # The last sample is stale, unavailable, or a poll is due or
+                # in flight. Never stop on old data: wait for a fresh sample.
+                self._auto_stop_revalidation = generation
+                self._auto_stop_revalidation_seq = self._poll_seq + 1
+                self._auto_stop_deadline = None
+                self._auto_stop_generation = None
+                if not self._poll_inflight:
+                    self._poll_due_at = now
+                    request_sample = True
+        if stop_now:
+            logging.info("Auto-stop delay elapsed with a fresh empty sample")
+            self._begin_stop()
+        elif request_sample:
+            logging.info("Auto-stop revalidation requested")
+
+    def _begin_stop(self) -> bool:
+        with self._state_lock:
+            if not self._begin_stop_locked():
+                return False
+            generation = self._generation
+        self._publish_lifecycle(LifecycleState.STOPPING, generation)
+        return True
+
+    # ------------------------------------------------------------------
+    # Workers: blocking I/O only, results submitted as observations
+    # ------------------------------------------------------------------
+
+    def _on_process_exit(self, identity: ProcessIdentity):
+        self._observations.put(ProcessExit(identity))
+
+    def _detection_worker(self):
+        while not self._closing.is_set():
+            try:
+                generation = self.generation
+                snapshot = self.process_manager.observe()
+                self._observations.put(ProcessObservation(generation, snapshot))
+            except Exception:
+                logging.exception("Process detection failed")
+            self._closing.wait(settings.pollingRate)
+
+    def _poll_worker(self):
+        while not self._closing.is_set():
+            request = self._poll_requests.get()
+            if request is None:
+                break
+            try:
+                players = self.client.get_player_names()
+            except Exception:
+                logging.exception("REST poll failed")
+                players = None
+            self._observations.put(
+                RosterSample(
+                    request.generation, request.identity, request.seq, players
+                )
+            )
+
+    def _launch_worker(self):
+        while not self._closing.is_set():
+            request = self._launch_requests.get()
+            if request is None:
+                break
+            if self._closing.is_set():
+                break
+            try:
+                identity = self.process_manager.launch_process(
+                    settings.palworldServerExePath, settings.palworldExeArguments
+                )
+            except Exception:
+                logging.exception("Server launch failed")
+                identity = None
+            self._observations.put(LaunchResult(request.generation, identity))
+
+    def _stop_worker(self):
+        while not self._closing.is_set():
+            request = self._stop_requests.get()
+            if request is None:
+                break
+            try:
+                stopped = self.process_manager.terminate_process(request.identity)
+            except Exception:
+                logging.exception("Server termination failed")
+                stopped = False
+            self._observations.put(
+                StopResult(request.generation, request.identity, stopped)
+            )

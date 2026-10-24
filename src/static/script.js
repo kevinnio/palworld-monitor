@@ -84,46 +84,92 @@ function updateThemeButton(theme) {
 }
 
 // UI update functions
-function updateServerStatusUI(data, response) {
+let lastSnapshotRevision = -1;
+
+function applySnapshot(data) {
+    if (!data) return;
+    const revision = typeof data.revision === "number" ? data.revision : 0;
+    if (revision < lastSnapshotRevision) return;
+    lastSnapshotRevision = revision;
+    updateServerStatusUI(data);
+    updatePlayerInfoUI(data);
+    updateLastUpdatedUI();
+}
+
+function updateServerStatusUI(data) {
     const runningElements = document.querySelectorAll(".status-indicator.running");
     const offElements = document.querySelectorAll(".status-indicator.off");
     const offBtn = document.getElementById("offBtn");
     const onBtn = document.getElementById("onBtn");
     const statusOn = document.querySelector('.status-on');
     const statusOff = document.querySelector('.status-off');
-    const autoStopNotice = document.getElementById('autoStopNotice');
-    if (autoStopNotice) autoStopNotice.style.display = data.running ? 'block' : 'none';
+    const stateText = document.getElementById("serverStateText");
+    const autoStopNotice = document.getElementById("autoStopNotice");
 
-    if (data.running) {
+    const state = data.state || "STOPPED";
+    // The process is only known to be alive between RUNNING and a confirmed exit.
+    const processLive = state === "RUNNING" || state === "STOPPING";
+
+    if (processLive) {
         if (statusOn) statusOn.style.display = "inline-block";
         if (statusOff) statusOff.style.display = "none";
         runningElements.forEach(el => el.style.display = "inline-block");
         offElements.forEach(el => el.style.display = "none");
-        if (offBtn) offBtn.style.display = "block";
-        if (onBtn) onBtn.style.display = "none";
     }
     else {
         if (statusOn) statusOn.style.display = "none";
         if (statusOff) statusOff.style.display = "inline-block";
         runningElements.forEach(el => el.style.display = "none");
         offElements.forEach(el => el.style.display = "inline-block");
-        if (offBtn) offBtn.style.display = "none";
-        if (onBtn) onBtn.style.display = "block";
     }
+
+    if (stateText) {
+        if (state === "STARTING" || state === "STOPPING") {
+            stateText.textContent = state;
+            stateText.style.display = "inline-block";
+        } else {
+            stateText.style.display = "none";
+        }
+    }
+
+    if (autoStopNotice) {
+        autoStopNotice.style.display = state === "RUNNING" ? "block" : "none";
+    }
+
+    // Only offer a command that matches the observed state.
+    if (offBtn) offBtn.style.display = state === "RUNNING" ? "block" : "none";
+    if (onBtn) onBtn.style.display = state === "STOPPED" ? "block" : "none";
 }
 
-function updatePlayerInfoUI(data, response) {
+function updatePlayerInfoUI(data) {
     const playersInfoElement = document.getElementById("playersInfo");
     if (!playersInfoElement) return;
 
-    // Get banned players list from the response or use empty array if not available
-    const bannedPlayers = response.banned_players || [];
+    const playerData = data.playerData || "unknown";
+    const stopped = data.state === "STOPPED";
+    const statusElement = document.getElementById("playerDataStatus");
+    if (statusElement) {
+        if (stopped) {
+            statusElement.style.display = "none";
+        } else if (playerData === "unavailable") {
+            statusElement.textContent = "Player data unavailable - showing last known roster";
+            statusElement.style.display = "block";
+        } else if (playerData === "unknown") {
+            statusElement.textContent = "Player data not available yet";
+            statusElement.style.display = "block";
+        } else {
+            statusElement.style.display = "none";
+        }
+    }
+
+    // Get banned players list from the snapshot
+    const bannedPlayers = data.banned_players || [];
 
     // Create a set of banned Steam IDs for quick lookup
     const bannedSteamIds = new Set(bannedPlayers);
 
     // Combine online/offline players with banned players
-    let allPlayers = (response.players || []).map(player => ({
+    let allPlayers = (data.players || []).map(player => ({
         ...player,
         banned: bannedSteamIds.has(player.steam_id)
     }));
@@ -206,7 +252,13 @@ function updatePlayerInfoUI(data, response) {
 
         playersInfoElement.innerHTML = tableHTML;
     } else {
-        playersInfoElement.textContent = "- No players found";
+        if (stopped || playerData === "ok") {
+            playersInfoElement.textContent = "- No players found";
+        } else if (playerData === "unavailable") {
+            playersInfoElement.textContent = "- Player data unavailable";
+        } else {
+            playersInfoElement.textContent = "- Waiting for player data";
+        }
     }
 }
 
@@ -298,9 +350,7 @@ async function handleServerAction(action) {
         const response = await makeServerRequest(action);
         let data = response.data;
 
-        updateServerStatusUI(data, response);
-        updatePlayerInfoUI(data, response);
-        updateLastUpdatedUI();
+        applySnapshot(data);
     } catch (error) {
         console.error('Error handling server action:', error);
     }
@@ -341,9 +391,7 @@ async function handleKickPlayer(steamId, playerName) {
         }
 
         // Update UI with new data
-        updateServerStatusUI(result.data, result);
-        updatePlayerInfoUI(result.data, result);
-        updateLastUpdatedUI();
+        applySnapshot(result.data);
     } catch (error) {
         console.error('Error kicking player:', error);
         alert('An error occurred while trying to kick the player.');
@@ -386,10 +434,8 @@ async function handleBanPlayer(steamId, playerName) {
 
         // Update UI with new data
         if (result.data) {
-            updateServerStatusUI(result.data, result);
-            updatePlayerInfoUI(result.data, result);
+            applySnapshot(result.data);
         }
-        updateLastUpdatedUI();
     } catch (error) {
         console.error('Error banning player:', error);
         alert('An error occurred while trying to ban the player.');
@@ -451,12 +497,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Live updates via Server-Sent Events
     const eventSource = new EventSource('/stream');
+    eventSource.onopen = function () {
+        // A reconnected stream may come from a restarted controller whose
+        // revisions start over.
+        lastSnapshotRevision = -1;
+    };
     eventSource.onmessage = function (event) {
         try {
             const response = JSON.parse(event.data);
-            updateServerStatusUI(response.data, response);
-            updatePlayerInfoUI(response.data, response);
-            updateLastUpdatedUI();
+            applySnapshot(response.data);
         } catch (e) {
             console.error('Error parsing SSE data:', e);
         }

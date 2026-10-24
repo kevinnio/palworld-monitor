@@ -36,6 +36,7 @@
         Server Status:
         <span id="serverStatusText" class="status-on" style="display: none;">ON</span>
         <span id="serverStatusText" class="status-off" style="display: none;">OFF</span>
+        <span id="serverStateText" class="status-transitional" style="display: none;"></span>
     </h1>
 
     <!-- Action Buttons Section -->
@@ -48,13 +49,13 @@
         </button>
 
         <!-- Server Stop Button -->
-        <button id="offBtn" class="btn" {% if not data.running %}style="display:none;" {% endif %}
+        <button id="offBtn" class="btn" {% if data.state != 'RUNNING' %}style="display:none;" {% endif %}
             onclick="confirmAndHandleServerAction('stopServer')">
             Stop Server
         </button>
 
         <!-- Server Start Button -->
-        <button id="onBtn" class="btn" {% if data.running %}style="display:none;" {% endif %}
+        <button id="onBtn" class="btn" {% if data.state != 'STOPPED' %}style="display:none;" {% endif %}
             onclick="handleServerAction('startServer')">
             Start Server
         </button>
@@ -63,11 +64,12 @@
 
     <!-- Player Information -->
     <h2>Players:</h2>
+    <div id="playerDataStatus" class="player-data-status" style="display: none;"></div>
     <div id="playersInfo">- Loading...</div>
 
     <!-- Auto-Stop Information -->
     {% if autoStopEnabled %}
-    <div id="autoStopNotice" style="margin-top:30px;{% if not data.running %} display:none;{% endif %}">
+    <div id="autoStopNotice" style="margin-top: 30px;{% if data.state != 'RUNNING' %} display: none;{% endif %}">
         Notice: If there are no players online, the server will automatically stop after
         <span id="ServerAutoOffTime">{{ autoStopDelay }}</span> seconds.
     </div>

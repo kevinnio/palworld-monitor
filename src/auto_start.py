@@ -14,9 +14,9 @@
 """Auto-start manager: listens for Palworld client packets and launches the server."""
 
 import socket
-from src.events import bus, Event
+from src.events import EventBus, Event
 from src.settings import settings
-from src.palworld_control import PalWorldController
+from src.palworld_control import LifecycleState, PalWorldController
 import logging
 import threading
 import traceback
@@ -25,17 +25,41 @@ import time
 
 
 class AutoStartManager:
-    def __init__(self, palworld_controller: Optional[PalWorldController]):
+    def __init__(
+        self,
+        palworld_controller: Optional[PalWorldController],
+        bus: EventBus,
+    ):
         self.controller: Optional[PalWorldController] = palworld_controller
+        self.bus = bus
         self.sock = None
         self.is_aborting = False
         self.listen_thread = None
         self._lock = threading.Lock()
-        self._setup_subscriptions()
+        self._subscribed = False
+        self._subscribe()
 
-    def _setup_subscriptions(self):
-        bus.subscribe(Event.SERVER_STARTED, self.stop_listen_thread)
-        bus.subscribe(Event.SERVER_STOPPED, self.listen_palworld_access)
+    def _subscribe(self):
+        if self._subscribed:
+            return
+        self.bus.subscribe(Event.SERVER_STARTED, self.stop_listen_thread)
+        self.bus.subscribe(Event.SERVER_STOPPED, self.listen_palworld_access)
+        self.bus.subscribe(Event.LIFECYCLE_CHANGED, self._on_lifecycle_changed)
+        self._subscribed = True
+
+    def _on_lifecycle_changed(self, data):
+        if data.get("state") == LifecycleState.STARTING:
+            # Release the game port before the server process starts.
+            self.stop_listen_thread()
+
+    def close(self):
+        """Stop listening and unsubscribe from committed lifecycle events."""
+        self.stop_listen_thread()
+        if self._subscribed:
+            self.bus.unsubscribe(Event.SERVER_STARTED, self.stop_listen_thread)
+            self.bus.unsubscribe(Event.SERVER_STOPPED, self.listen_palworld_access)
+            self.bus.unsubscribe(Event.LIFECYCLE_CHANGED, self._on_lifecycle_changed)
+            self._subscribed = False
 
     def is_port_available(self, port):
         """Check if PalWorld server port is available."""
@@ -152,27 +176,24 @@ class AutoStartManager:
 
     def listen_palworld_access_core(self):
         """Listen from PalWorld server port."""
-        if self.controller is None or self.controller.is_palworld_process_running():
+        if self.controller is None or self.controller.state != LifecycleState.STOPPED:
             return
 
-        for attempt in range(3):
+        for _attempt in range(3):
             if self.is_aborting:
                 return
 
             if not self.open_palworld_port_socket():
                 return
 
-            if self.wait_for_player_connection():
+            if not self.wait_for_player_connection():
                 self.close_palworld_port_socket()
-                time.sleep(0.5)
-                if self.controller is not None:
-                    self.controller.start_server()
-                    time.sleep(2)
-                    if self.controller.is_palworld_process_running():
-                        return
-                    logging.warning("Server did not start successfully, reconnecting...")
-            else:
-                self.close_palworld_port_socket()
+                return
+
+            # The server is about to start; release the port and let the
+            # supervisor's committed state re-arm listening if the launch fails.
+            self.close_palworld_port_socket()
+            if self.controller.start_server():
                 return
 
     def listen_palworld_access(self, data=None):
