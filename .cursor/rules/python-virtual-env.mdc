@@ -1,4 +1,0 @@
----
-alwaysApply: true
----
-Always use `uv run` for Python commands (e.g. `uv run poe test`).
