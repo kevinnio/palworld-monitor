@@ -163,15 +163,21 @@ class WebServer:
             # Player list will be populated by the update thread via PLAYER_JOINED events.
 
     def _on_server_stopped(self, data):
+        # Route through the status handler so connected dashboards get the
+        # change over SSE: the poll thread that used to push it stops with
+        # this event. PlayerManager has already released the players by now,
+        # so the refresh keeps showing them (offline, with last-seen time)
+        # instead of "No players found".
         with self._lock:
-            self.state_cache["running"] = False
-            # Refresh from PlayerManager rather than wiping to [] -- this
-            # keeps showing the last-known players (correctly marked
-            # offline, with their last-seen time) instead of "No players
-            # found", matching what a page reload already shows via
-            # get_players_for_web() elsewhere.
-            self.state_cache["players"] = list(self.palworld_controller.get_players_for_web())
-            self.state_cache["playerCount"] = 0
+            banned_players = list(self.state_cache["banned_players"])
+        self._on_server_status(
+            {
+                "running": False,
+                "playerCount": 0,
+                "players": [],
+                "banned_players": banned_players,
+            }
+        )
 
     def _on_server_status(self, data):
         with self._lock:

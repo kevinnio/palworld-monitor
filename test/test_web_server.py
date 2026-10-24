@@ -2,7 +2,7 @@
 Extended tests for WebServer route handlers and event integration.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from src.web_server import WebServer
 
 class TestWebServerEventHandlers:
@@ -43,11 +43,18 @@ class TestWebServerEventHandlers:
             "banned_players": [],
         }
         server._lock = MagicMock()
+        server._sse_lock = MagicMock()
+        server._sse_clients = []
 
-        server._on_server_stopped({"pid": 12345})
+        with patch.object(server, "_broadcast_sse") as mock_broadcast:
+            server._on_server_stopped({"pid": 12345})
         assert server.state_cache["running"] is False
         assert server.state_cache["players"] == last_known_players
         assert server.state_cache["playerCount"] == 0
+        # The poll thread that used to push status stops with this event,
+        # so the stop itself must reach connected dashboards.
+        mock_broadcast.assert_called_once()
+        assert mock_broadcast.call_args[0][0]["data"]["running"] is False
 
     def test_on_server_status_updates_all_fields(self, mock_settings):
         """Test that SERVER_STATUS event updates all cached fields.
