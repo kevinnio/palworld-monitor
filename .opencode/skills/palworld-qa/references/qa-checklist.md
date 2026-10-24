@@ -29,7 +29,7 @@ Run the ones matching changed areas, plus at least two unrelated ones.
 | E1 | lifecycle | Start while already running | Start a second time via `/action` | Response stays RUNNING; no second PalServer process |
 | E2 | lifecycle | Stop while already stopped | Stop a second time via `/action` | Response stays STOPPED; HTTP 200; no error state |
 | E3 | auto-start | UDP probe starts the server | With the app STOPPED, send `09 08 00` to UDP 8211 | Server starts; dashboard goes RUNNING |
-| E4 | process/lifecycle | External crash | Kill the dummy process while RUNNING | Dashboard goes OFF; players offline; auto-start listener re-arms |
+| E4 | process/lifecycle | External crash | Kill the dummy process while RUNNING; on Linux include an exited child that has not yet been reaped | Dashboard goes OFF; players offline; auto-start listener re-arms; a zombie is not considered a running server or adopted as a replacement |
 | E5 | REST/lifecycle | REST unavailable, process alive | Make REST unavailable with a running dummy; enable auto-stop and wait past guard+delay | State stays RUNNING; `playerData=unavailable`; last-known roster preserved with an unavailable warning, not replaced by an authoritative empty roster; no auto-stop |
 | E6 | auto-stop | Empty roster auto-stops | After monitor startup cleanup, launch a dummy with `DUMMY_PLAYER_COUNT=0`; confirm it is alive and RUNNING with a healthy empty roster; wait past guard+delay without sending stop | Committed states progress through STOPPING to STOPPED; the owned dummy exits only after the startup guard; a setup kill or crash cannot count as a pass |
 | E7 | web/SSE | Stale snapshot ignored | Apply an older revision snapshot in page JS | Dashboard does not regress; no stale player appears |
@@ -57,13 +57,40 @@ When `qa_delta.py` reports an area, update and run the matching scenarios.
 
 Run E16 after every QA pass, including failed or interrupted runs.
 
-## Not browser-testable here
+## Automated coverage and manual checks
 
-- Real LinuxGSM shutdown and detection of delayed exits.
-- Linux process backend and real PalServer process behavior.
-- Destructive e2e/smoke suites.
+Coverage below describes existing assertions, not run results. Related unit or
+integration tests do not replace every visible result in a QA scenario.
 
-Report these as unverified risk; unit tests cover the mocked paths.
+| Scenarios | Automated coverage | Still check manually |
+|-----------|--------------------|----------------------|
+| H1, E8, E9 | Unit auth rules; integration login/failure/logout routes; E2E browser login and dashboard rendering | Browser errors, invalid-login feedback, logout protection |
+| H2, H3, H8, E1, E2 | Unit transitions/guards; integration controller/process/route behavior; E2E browser start/stop | Transitional labels, correct button visibility, duplicate start/stop requests through the live web routes |
+| H4, E7 | Unit server snapshots/revision ordering; integration payloads; auto-stop E2E reads committed SSE states | Dashboard consistency across refreshes and rejection of an older revision in page JavaScript |
+| H5, H6, H7, E10 | Unit API calls/ban storage; integration action routes and dummy API; E2E browser kick/ban reduces online counts | Alerts, exact row/banned-list state, browser unban and ban persistence after reload |
+| H9, E4, E11, E14 | Unit listener behavior and zombie rejection; integration restarts, process replacement, stale generations, thread cleanup and a real unreaped Linux child | Full crash recovery and repeated UDP start/web stop/restart cycle without leaked listeners |
+| H10 | Integration initial HTML checks when stopped, running and auto-stop disabled | Live notice visibility through STARTING, RUNNING, STOPPING and STOPPED |
+| E3 | Unit packet/listener behavior; E2E sends a real UDP packet and checks process discovery | Dashboard reaches RUNNING and listener releases the game port |
+| E5, E15 | Unit REST failure/policy rules; integration blocked I/O, roster preservation and late-response rejection | Degraded dashboard warning and live control/detection while REST is unavailable or blocked |
+| E6 | Unit deadline/freshness policy; integration controller revalidation; E2E healthy empty dummy, startup guard, STOPPING/STOPPED and confirmed exit | Dashboard OFF and notice visibility after the automatic stop |
+| E12, E13 | Unit stop/state contracts; integration four-worker lifecycle, failed stops, and delayed LGSM stand-in shutdown | Fault-path behavior with the deployed process backend |
+| E16 | Integration fixtures clean up owned processes; E2E fixtures perform cleanup | Rescan exact dummy processes and QA-owned ports, including launcher children; verify unrelated processes were untouched |
+
+Test locations and commands:
+
+- Unit tests: `test/test_*.py`. External services are generally mocked, although some tests use real files, sockets or threads.
+- Integration tests: `test/integration/`. Includes real native process launches, a Linux-only executable LGSM stand-in, dummy REST API contracts, controller/runtime wiring and Flask request flows. Run with `uv run poe test test/integration`.
+- E2E tests: `test/e2e/`. Run the full monitor with the dummy server, including Playwright browser login, start/stop and kick/ban, plus UDP auto-start and empty-server auto-stop. Run with `uv run poe smoke` only when explicitly requested and after the environment safety checks.
+- `uv run poe test` runs unit and integration tests together. CI runs both this command and the E2E suite on Windows and Ubuntu.
+
+## Platform coverage and limits
+
+- Browser E2E scenarios run on Windows and Linux. Timing failures should be diagnosed and fixed with bounded condition waits, not hidden by a blanket Linux skip.
+- Native process contracts run only on their matching OS. The LinuxGSM stand-in requires Linux executable-script support, so it skips on other platforms.
+- LGSM integration skips when an existing PalServer is detected. Dummy API and LGSM integration skip if their required REST port is unavailable, rather than contacting or stopping another service.
+- The LGSM stand-in checks our real command invocation, process discovery, adoption, failure handling and delayed exit. It does not verify upstream LinuxGSM, tmux, cron monitoring or actual game shutdown behavior.
+- The dummy REST API is not a real Palworld server. Real-game behavior and a real LinuxGSM installation remain separate host-level validation.
+- E2E helpers are destructive. A passing suite is not proof of E16's isolation requirements. Never run them against a real server or unrelated port owner.
 
 ## Catalog maintenance
 
