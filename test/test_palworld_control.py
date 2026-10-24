@@ -370,3 +370,30 @@ class TestPalWorldController:
         ):
             controller._server_detection_loop()
         assert len(calls) >= 2
+
+    def test_down_server_marks_tracked_players_offline(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        """Ghost players: a server that stops must release its tracked
+        players, otherwise they show as online forever."""
+        mock_process_manager.is_process_running.return_value = False
+        controller = PalWorldController(
+            client=mock_client,
+            process_manager=mock_process_manager,
+            player_manager=mock_player_manager,
+        )
+        controller._update_server_info_with_players()
+        mock_client.get_player_names.assert_not_called()
+        mock_player_manager.update_players_from_server.assert_called_once_with([])
+
+    def test_up_server_updates_tracked_players(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        mock_process_manager.is_process_running.return_value = True
+        controller = PalWorldController(
+            client=mock_client,
+            process_manager=mock_process_manager,
+            player_manager=mock_player_manager,
+        )
+        controller._update_server_info_with_players()
+        mock_player_manager.update_players_from_server.assert_called_once_with([])

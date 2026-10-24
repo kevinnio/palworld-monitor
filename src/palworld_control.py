@@ -236,8 +236,11 @@ class PalWorldController:
         )
 
     def _update_server_info_with_players(self):
-        self.current_server_info["running"] = self.is_palworld_process_running()
-        players = self.get_player_names()
+        running = self.is_palworld_process_running()
+        self.current_server_info["running"] = running
+        # Server down: skip the REST call and release tracked players, who
+        # would otherwise show as online forever after a stop.
+        players = self.get_player_names() if running else []
         self.current_server_info["playerCount"] = len(players)
         self.current_server_info["players"] = players
         if settings.enablePlayerTracking:
