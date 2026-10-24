@@ -30,6 +30,20 @@ def _determine_settings_path(args):
 def main():
     args = parse_args()
 
+    print(r"""
+ ____   _    _ __        _____  ____  _     ____
+|  _ \ / \  | |\ \      / / _ \|  _ \| |   |  _ \
+| |_) / _ \ | | \ \ /\ / / | | | |_) | |   | | | |
+|  __/ ___ \| |__\ V  V /| |_| |  _ <| |___| |_| |
+|_| /_/   \_\_____\_/\_/  \___/|_| \_\_____|____/
+
+ __  __  ___  _   _ ___ _____ ___  ____
+|  \/  |/ _ \| \ | |_ _|_   _/ _ \|  _ \
+| |\/| | | | |  \| || |  | || | | | |_) |
+| |  | | |_| | |\  || |  | || |_| |  _ <
+|_|  |_|\___/|_| \_|___| |_| \___/|_| \_\
+""", flush=True)
+
     log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
 
