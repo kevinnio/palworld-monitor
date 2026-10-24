@@ -310,14 +310,17 @@ class TestPalWorldController:
 
     @patch("src.events.bus.publish")
     def test_process_gone_emits_server_stopped(
-        self, mock_publish, mock_settings, mock_client, mock_process_manager
+        self, mock_publish, mock_settings, mock_client, mock_process_manager,
+        mock_player_manager,
     ):
         """Regression for issue #6: a tracked process exiting outside the
         monitor (crash, closed window) must fire SERVER_STOPPED so the status
         poll loop halts and the auto-start listener re-arms."""
         mock_process_manager.launched_pid = 1234
         mock_process_manager.is_process_running.return_value = False
-        controller = self._controller_without_loop(mock_process_manager, mock_client)
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
         controller._check_tracked_process_gone()
         mock_publish.assert_called_once_with(Event.SERVER_STOPPED, {"pid": None})
         mock_process_manager.clear_pid.assert_called_once()
@@ -328,29 +331,34 @@ class TestPalWorldController:
     ):
         mock_process_manager.launched_pid = 1234
         mock_process_manager.is_process_running.return_value = True
-        controller = self._controller_without_loop(mock_process_manager, mock_client)
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
         controller._check_tracked_process_gone()
         mock_publish.assert_not_called()
         mock_process_manager.clear_pid.assert_not_called()
 
     @patch("src.events.bus.publish")
     def test_no_tracked_process_emits_no_stopped_event(
-        self, mock_publish, mock_settings, mock_client, mock_process_manager
+        self, mock_publish, mock_settings, mock_client, mock_process_manager,
+        mock_player_manager,
     ):
-        controller = self._controller_without_loop(mock_process_manager, mock_client)
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
         controller._check_tracked_process_gone()
         mock_publish.assert_not_called()
         mock_process_manager.clear_pid.assert_not_called()
 
     def test_detection_loop_keeps_watching_after_start(
-        self, mock_settings, mock_client, mock_process_manager
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
     ):
         """The loop must not exit once a process is tracked: it is also the
         watcher that notices the process disappearing."""
         mock_process_manager.launched_pid = 1234
         mock_process_manager.is_process_running.return_value = True
-        controller = PalWorldController(
-            client=mock_client, process_manager=mock_process_manager
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
         )
         calls = []
 
@@ -405,7 +413,8 @@ class TestPalWorldController:
         controller = self._controller_without_loop(
             mock_process_manager, mock_client, mock_player_manager
         )
-        controller._on_server_stopped({})
+        with patch.object(PalWorldController, "_start_detection_loop"):
+            controller._on_server_stopped({})
         mock_player_manager.update_players_from_server.assert_called_once_with([])
 
     def test_auto_stop_still_arms_when_running_with_no_players(
@@ -413,7 +422,9 @@ class TestPalWorldController:
     ):
         """Guard m1: the not-running skip must not disable auto-stop."""
         mock_process_manager.is_process_running.return_value = True
-        controller = self._controller_without_loop(mock_process_manager, mock_client)
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
         controller.current_server_info["running"] = True
         controller.last_server_started_time = 0
         with patch("threading.Thread"):
@@ -421,9 +432,11 @@ class TestPalWorldController:
         assert controller.auto_stop_delay_thread is not None
 
     def test_auto_stop_skipped_when_server_not_running(
-        self, mock_settings, mock_client, mock_process_manager
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
     ):
         mock_process_manager.is_process_running.return_value = False
-        controller = self._controller_without_loop(mock_process_manager, mock_client)
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
         controller._handle_auto_stop_condition()
         assert controller.auto_stop_delay_thread is None
