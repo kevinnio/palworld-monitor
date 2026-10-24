@@ -269,14 +269,15 @@ class TestPalWorldController:
             mock_start.assert_called_once()
 
     def test_on_server_stopped_stops_update_thread(
-        self, mock_settings, mock_client, mock_process_manager
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
     ):
         mock_process_manager.is_process_running.return_value = False
-        controller = PalWorldController(
-            client=mock_client, process_manager=mock_process_manager
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
         )
         with patch.object(controller, "stop_server_info_update_thread") as mock_stop:
-            controller._on_server_stopped({"pid": 1234})
+            with patch.object(PalWorldController, "_start_detection_loop"):
+                controller._on_server_stopped({"pid": 1234})
             mock_stop.assert_called_once()
 
     def test_get_players_for_web_returns_player_manager_data(
