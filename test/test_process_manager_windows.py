@@ -26,6 +26,16 @@ class TestWindowsProcessManager:
         manager = WindowsProcessManager()
         assert manager.pid_file_name() == "palworld_server.win.pid"
 
+    def test_clear_pid_forgets_process_and_file(self):
+        """clear_pid must drop the tracked pid and the pid file, so the
+        detection loop can look for a fresh process afterwards."""
+        manager = WindowsProcessManager()
+        manager.set_known_pid(999999)
+        assert os.path.exists(manager.pid_file_name())
+        manager.clear_pid()
+        assert manager.launched_pid is None
+        assert not os.path.exists(manager.pid_file_name())
+
     def test_launch_and_check_process(self, test_sleep_script):
         """Test launching a process and checking if it's running."""
         manager = WindowsProcessManager()

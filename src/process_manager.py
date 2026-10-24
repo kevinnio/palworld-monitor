@@ -74,6 +74,12 @@ class OSProcessManager:
             except Exception:
                 self.launched_pid = None
 
+    def clear_pid(self):
+        """Forget the tracked process (it exited outside our control)."""
+        with self._lock:
+            self.launched_pid = None
+            self._remove_pid_file()
+
     def launch_process(self, _exe_path, _exe_args):
         raise NotImplementedError
 
