@@ -14,7 +14,6 @@ from src.palworld_control import PalWorldController
 from src.player_manager import PlayerManager
 
 
-
 class FakeClock:
     def __init__(self, now=1000.0):
         self.now = now
@@ -37,7 +36,6 @@ class FakeProcessManager:
         self.terminate_entered = threading.Event()
         self.terminate_result = True
         self.terminate_mutates = True
-        self.on_exit = None
         self.launch_calls = []
         self.terminate_calls = []
         self.closed = False
@@ -48,9 +46,6 @@ class FakeProcessManager:
     @property
     def tracked_identity(self):
         return self.identity
-
-    def set_exit_callback(self, callback):
-        self.on_exit = callback
 
     def set_known_identity(self, identity):
         self.identity = identity
@@ -107,10 +102,6 @@ class FakeProcessManager:
             self.clear_identity(self.identity)
             self.found = None
         return True
-
-    def emit_exit(self, identity):
-        if self.on_exit is not None:
-            self.on_exit(identity)
 
     def close(self):
         self.closed = True
@@ -193,8 +184,7 @@ CONTROLLER_THREAD_NAMES = {
     "palworld-lifecycle",
     "palworld-detection",
     "palworld-poll",
-    "palworld-launch",
-    "palworld-stop",
+    "palworld-process",
 }
 
 
@@ -256,9 +246,7 @@ class TestPalWorldController:
         snapshot = harness.controller.get_snapshot()
         assert snapshot["state"] == LifecycleState.STOPPED
         assert snapshot["playerData"] == "unknown"
-        assert all(
-            not player["currently_online"] for player in snapshot["players"]
-        )
+        assert all(not player["currently_online"] for player in snapshot["players"])
 
         assert harness.controller.start_server() is True
         wait_until(lambda: harness.controller.state == LifecycleState.RUNNING)
@@ -315,7 +303,6 @@ class TestPalWorldController:
 
         harness.pm.alive.discard(identity.pid)
         harness.pm.found = None
-        harness.pm.emit_exit(identity)
         wait_until(lambda: harness.controller.state == LifecycleState.STOPPED)
 
     def test_blocked_rest_at_deadline_does_not_stop_on_an_old_empty_sample(
@@ -330,7 +317,9 @@ class TestPalWorldController:
 
         # Pass the startup guard so a later empty sample arms the deadline.
         harness.clock.advance(31)
-        wait_until(lambda: harness.controller._supervisor.auto_stop_deadline is not None)
+        wait_until(
+            lambda: harness.controller._supervisor.auto_stop_deadline is not None
+        )
 
         # A poll is already in flight when the deadline expires.
         harness.client.entered.clear()
@@ -360,7 +349,9 @@ class TestPalWorldController:
         harness.start_with_process()
         wait_until(lambda: harness.controller.get_snapshot()["playerData"] == "ok")
         harness.clock.advance(31)
-        wait_until(lambda: harness.controller._supervisor.auto_stop_deadline is not None)
+        wait_until(
+            lambda: harness.controller._supervisor.auto_stop_deadline is not None
+        )
 
         harness.client.entered.clear()
         harness.client.block = threading.Event()
@@ -659,9 +650,7 @@ class TestPalWorldController:
         harness.clock.advance(settings_auto_stop_delay(harness) + 5)
         wait_until(lambda: harness.controller.state == LifecycleState.STOPPED)
 
-    def test_stale_stop_result_and_exit_cannot_stop_a_restarted_generation(
-        self, harness
-    ):
+    def test_restart_waits_for_old_stop_and_discards_its_stale_result(self, harness):
         first = harness.start_with_process(ProcessIdentity(1001, 10.0))
 
         harness.pm.terminate_block = threading.Event()
@@ -677,12 +666,12 @@ class TestPalWorldController:
 
         harness.pm.launch_identity = ProcessIdentity(2002, 20.0)
         assert harness.controller.start_server() is True
-        wait_until(lambda: harness.controller.state == LifecycleState.RUNNING)
+        assert harness.controller.state == LifecycleState.STARTING
+        assert harness.pm.launch_calls == []
 
-        # Late stop result and late exit callback from generation 1.
+        # The shared worker finishes the old stop before launching a replacement.
         harness.pm.terminate_block.set()
-        harness.pm.emit_exit(first)
-        time.sleep(0.1)
+        wait_until(lambda: harness.controller.state == LifecycleState.RUNNING)
 
         assert harness.controller.state == LifecycleState.RUNNING
         assert len(harness.events_of(Event.SERVER_STOPPED)) == 1

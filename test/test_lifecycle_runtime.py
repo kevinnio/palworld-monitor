@@ -7,7 +7,12 @@ import pytest
 
 from src.banlist_manager import BanlistManager
 from src.events import EventBus
-from src.lifecycle.messages import LifecycleState, ProcessIdentity, StopCommand
+from src.lifecycle.messages import (
+    LifecycleState,
+    ProcessIdentity,
+    StartCommand,
+    StopCommand,
+)
 from src.lifecycle.runtime import LifecycleRuntime
 from src.lifecycle.supervisor import Supervisor
 from src.player_manager import PlayerManager
@@ -17,8 +22,7 @@ CONTROLLER_THREAD_NAMES = {
     "palworld-lifecycle",
     "palworld-detection",
     "palworld-poll",
-    "palworld-launch",
-    "palworld-stop",
+    "palworld-process",
 }
 
 
@@ -77,6 +81,13 @@ def runtime_env(mock_settings, tmp_path):
 
 
 class TestLifecycleRuntime:
+    def test_starts_only_four_threads(self, runtime_env):
+        runtime, _supervisor, _client, _pm, _bus = runtime_env
+        runtime.start()
+
+        assert set(runtime._threads) == CONTROLLER_THREAD_NAMES
+        assert all(thread.is_alive() for thread in runtime._threads.values())
+
     def test_blocked_rest_response_after_stop_is_discarded(self, runtime_env):
         runtime, supervisor, client, pm, _bus = runtime_env
         identity = ProcessIdentity(1001, 10.0)
@@ -102,9 +113,7 @@ class TestLifecycleRuntime:
         assert snapshot["playerCount"] == 0
         assert snapshot["players"] == []
 
-    def test_repeated_start_close_leaves_no_threads_or_subscriptions(
-        self, runtime_env
-    ):
+    def test_repeated_start_close_leaves_no_threads_or_subscriptions(self, runtime_env):
         runtime, _supervisor, _client, _pm, bus = runtime_env
         baseline = bus.subscriber_count()
 
@@ -116,6 +125,104 @@ class TestLifecycleRuntime:
         assert not any(
             thread.name in CONTROLLER_THREAD_NAMES for thread in threading.enumerate()
         )
+
+    def test_commands_work_after_restart(self, runtime_env):
+        runtime, supervisor, _client, pm, _bus = runtime_env
+        supervisor.server_starting_cooldown = 0
+        supervisor.server_stopping_cooldown = 0
+
+        for pid in range(1001, 1004):
+            pm.launch_identity = ProcessIdentity(pid, 10.0)
+            runtime.start()
+            try:
+                assert runtime.submit_command(StartCommand()) is True
+                wait_until(lambda: supervisor.state == LifecycleState.RUNNING)
+                assert runtime.submit_command(StopCommand()) is True
+                wait_until(lambda: supervisor.state == LifecycleState.STOPPED)
+            finally:
+                runtime.close()
+
+    def test_cannot_restart_while_a_worker_is_still_blocked(
+        self, runtime_env, monkeypatch
+    ):
+        runtime, supervisor, client, pm, _bus = runtime_env
+        monkeypatch.setattr("src.lifecycle.runtime._WORKER_JOIN_TIMEOUT", 0.01)
+        pm.found = ProcessIdentity(1001, 10.0)
+        pm.alive.add(pm.found.pid)
+        client.block = threading.Event()
+        runtime.start()
+        assert client.entered.wait(1)
+
+        try:
+            runtime.close()
+            with pytest.raises(RuntimeError, match="still shutting down"):
+                runtime.start()
+        finally:
+            client.block.set()
+            wait_until(lambda: not any(t.is_alive() for t in runtime._threads.values()))
+
+        runtime.start()
+        wait_until(lambda: supervisor.get_snapshot()["playerData"] == "ok")
+
+    def test_process_worker_survives_launch_and_stop_errors(
+        self, runtime_env, monkeypatch
+    ):
+        runtime, supervisor, _client, pm, _bus = runtime_env
+        supervisor.server_starting_cooldown = 0
+        supervisor.server_stopping_cooldown = 0
+        pm.launch_identity = ProcessIdentity(1001, 10.0)
+
+        def fail(*_args):
+            raise OSError("process operation failed")
+
+        runtime.start()
+        with monkeypatch.context() as patch:
+            patch.setattr(pm, "launch_process", fail)
+            assert runtime.submit_command(StartCommand()) is True
+            wait_until(lambda: supervisor.state == LifecycleState.STOPPED)
+
+        assert runtime.submit_command(StartCommand()) is True
+        wait_until(lambda: supervisor.state == LifecycleState.RUNNING)
+        with monkeypatch.context() as patch:
+            patch.setattr(pm, "terminate_process", fail)
+            assert runtime.submit_command(StopCommand()) is True
+            wait_until(lambda: supervisor.state == LifecycleState.RUNNING)
+
+        assert runtime.submit_command(StopCommand()) is True
+        wait_until(lambda: supervisor.state == LifecycleState.STOPPED)
+
+    def test_detection_confirms_delayed_lgsm_shutdown(
+        self, runtime_env, monkeypatch, tmp_path
+    ):
+        from src.process_manager import LGSMProcessManager
+
+        runtime, supervisor, _client, _pm, _bus = runtime_env
+        monkeypatch.setattr(
+            LGSMProcessManager, "pid_file_name", lambda _: str(tmp_path / "server.pid")
+        )
+        manager = LGSMProcessManager()
+        identity = ProcessIdentity(1001, 10.0)
+        alive = {identity.pid}
+        monkeypatch.setattr(manager, "_run_lgsm_command", lambda *_args: True)
+        monkeypatch.setattr(
+            manager, "identity_is_running", lambda i: i is not None and i.pid in alive
+        )
+        monkeypatch.setattr(
+            manager, "find_process_identity", lambda _name: identity if alive else None
+        )
+        runtime.process_manager = supervisor.process_manager = manager
+        runtime.start()
+        wait_until(lambda: supervisor.state == LifecycleState.RUNNING)
+
+        assert runtime.submit_command(StopCommand()) is True
+        wait_until(lambda: runtime._process_requests.empty())
+        assert supervisor.state == LifecycleState.STOPPING
+        assert manager.tracked_identity == identity
+
+        alive.clear()
+        wait_until(lambda: supervisor.state == LifecycleState.STOPPED)
+        assert manager.tracked_identity is None
+        assert not (tmp_path / "server.pid").exists()
 
     def test_command_before_start_is_rejected(self, runtime_env):
         runtime, _supervisor, _client, _pm, _bus = runtime_env

@@ -92,6 +92,8 @@ class AutoStartManager:
                 except (OSError, AttributeError):
                     pass
                 new_sock.bind(("0.0.0.0", palworld_server_port))
+                # Closing a UDP socket need not wake recvfrom on every OS.
+                new_sock.settimeout(0.2)
 
                 with self._lock:
                     if self.is_aborting:
@@ -154,8 +156,12 @@ class AutoStartManager:
             try:
                 data, _addr = sock.recvfrom(1024)
                 if self._is_player_connection_packet(data):
-                    logging.info("A player is attempting to connect. Starting Palworld Server...")
+                    logging.info(
+                        "A player is attempting to connect. Starting Palworld Server..."
+                    )
                     return True
+            except socket.timeout:
+                continue
             except OSError as e:
                 # Closing the socket from another thread (server started
                 # manually) is the normal way this listener shuts down.
@@ -201,9 +207,6 @@ class AutoStartManager:
         """Start listening for PalWorld access."""
         # Stop any existing listen thread
         self.stop_listen_thread()
-
-        # Add a small delay to allow the port to be released
-        time.sleep(1)
 
         # `is_aborting` is only ever cleared inside open_palworld_port_socket()'s
         # success path. If the *previous* cycle ended by successfully starting

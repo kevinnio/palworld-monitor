@@ -6,7 +6,6 @@ launching a real LGSM script.
 """
 
 import os
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,9 +20,6 @@ def manager():
     # Keep the tests fast: real timeouts default to 30s+.
     m.STARTUP_TIMEOUT = 0.2
     m.STARTUP_POLL_INTERVAL = 0.01
-    m.SHUTDOWN_VERIFY_TIMEOUT = 0.2
-    m.SHUTDOWN_VERIFY_POLL_INTERVAL = 0.01
-    m.SHUTDOWN_WATCHDOG_POLL_INTERVAL = 0.01
     return m
 
 
@@ -85,7 +81,7 @@ class TestLGSMProcessManager:
         assert kwargs["timeout"] == manager.LGSM_COMMAND_TIMEOUT
 
     @patch("src.process_manager.subprocess.run")
-    def test_terminate_process_stop_command_fails_falls_back_to_watchdog(
+    def test_terminate_process_stop_command_fails_leaves_tracking_for_detection(
         self, mock_run, manager
     ):
         """A failed/timed-out LGSM invocation doesn't necessarily mean the
@@ -100,12 +96,11 @@ class TestLGSMProcessManager:
         result = manager.terminate_process(identity)
 
         assert result is None
-        # Not resolved synchronously -- a background watchdog took over.
+        # Not resolved synchronously. Detection still needs the tracked identity.
         assert manager.tracked_identity == identity
-        manager.close()
 
     @patch("src.process_manager.subprocess.run")
-    def test_terminate_process_still_running_after_timeout(self, mock_run, manager):
+    def test_terminate_process_still_running_after_command(self, mock_run, manager):
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         identity = ProcessIdentity(4242, 1.0)
         manager.set_known_identity(identity)
@@ -116,39 +111,31 @@ class TestLGSMProcessManager:
 
         assert result is None
         assert manager.tracked_identity == identity
-        manager.close()
 
     @patch("src.process_manager.subprocess.run")
-    def test_terminate_process_watchdog_reports_exit_after_sync_timeout(
+    def test_pending_shutdown_is_observed_without_clearing_tracking(
         self, mock_run, manager
     ):
-        """Regression test: even if the process outlives the synchronous
-        verify window, the watchdog must eventually report the exit as an
-        observation so the supervisor can commit DOWN."""
+        """Detection, not a second watcher, reports a delayed exit."""
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         identity = ProcessIdentity(4242, 1.0)
         manager.set_known_identity(identity)
         manager._exe_path = "/home/gameserver/pwserver/pwserver"
-        exited = []
-
-        start = time.monotonic()
-        manager.identity_is_running = MagicMock(
-            side_effect=lambda _identity: (time.monotonic() - start) < 0.35
-        )
-        manager.set_exit_callback(exited.append)
+        manager.identity_is_running = MagicMock(return_value=True)
+        manager.find_process_identity = MagicMock(return_value=None)
 
         result = manager.terminate_process(identity)
 
         assert result is None
         assert manager.tracked_identity == identity  # not resolved synchronously
 
-        deadline = time.monotonic() + 3
-        while manager.tracked_identity is not None and time.monotonic() < deadline:
-            time.sleep(0.02)
+        manager.identity_is_running.return_value = False
+        snapshot = manager.observe()
 
-        assert manager.tracked_identity is None
-        assert not os.path.exists(manager.pid_file_name())
-        assert exited == [identity]
+        assert snapshot.tracked == identity
+        assert snapshot.tracked_running is False
+        assert manager.tracked_identity == identity
+        assert os.path.exists(manager.pid_file_name())
 
     def test_terminate_process_with_no_pid(self, manager):
         assert manager.terminate_process() is False

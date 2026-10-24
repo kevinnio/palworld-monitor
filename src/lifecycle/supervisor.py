@@ -17,7 +17,6 @@ from src.lifecycle.messages import (
     LaunchResult,
     LifecycleState,
     PollRequest,
-    ProcessExit,
     ProcessIdentity,
     ProcessObservation,
     ProcessSnapshot,
@@ -112,8 +111,6 @@ class Supervisor:
             return self._handle_launch_result(item)
         if isinstance(item, StopResult):
             return self._handle_stop_result(item)
-        if isinstance(item, ProcessExit):
-            return self._handle_process_exit(item)
         if isinstance(item, ProcessObservation):
             return self._handle_process_observation(item)
         if isinstance(item, RosterSample):
@@ -276,8 +273,7 @@ class Supervisor:
             self._commit_down()
         elif outcome is False:
             self._recover_from_failed_stop()
-        # None means the process manager is still watching an asynchronous
-        # shutdown (LGSM); stay STOPPING until it reports an exit.
+        # None means an LGSM shutdown is pending. Detection confirms the exit.
         return []
 
     def _recover_from_failed_stop(self):
@@ -288,19 +284,10 @@ class Supervisor:
             self._poll_due_at = self._clock()
             self._poll_inflight = False
             generation = self._generation
-        logging.warning("Stop failed while the process is still alive; resuming polling")
+        logging.warning(
+            "Stop failed while the process is still alive; resuming polling"
+        )
         self._publish_lifecycle(LifecycleState.RUNNING, generation)
-
-    def _handle_process_exit(self, observation: ProcessExit) -> list:
-        with self._state_lock:
-            if self._identity is None or not self._identity.matches(
-                observation.identity
-            ):
-                return []
-            if self._state not in (LifecycleState.RUNNING, LifecycleState.STOPPING):
-                return []
-        self._commit_down()
-        return []
 
     def _handle_process_observation(self, observation: ProcessObservation) -> list:
         with self._state_lock:
@@ -319,9 +306,8 @@ class Supervisor:
                 return []
             if state == LifecycleState.STOPPED:
                 if snapshot.tracked is not None:
-                    if (
-                        snapshot.found is not None
-                        and snapshot.found.matches(snapshot.tracked)
+                    if snapshot.found is not None and snapshot.found.matches(
+                        snapshot.tracked
                     ):
                         # Only adopt a tracked PID when this scan actually
                         # found it as PalServer; mere PID liveness is not proof.
@@ -374,9 +360,7 @@ class Supervisor:
                 # REST is unknown/unavailable: keep the last-known roster and
                 # never let an empty-looking failure trigger auto-stop.
                 self._player_data = "unavailable"
-                self._auto_stop, _decision = auto_stop.on_unavailable(
-                    self._auto_stop
-                )
+                self._auto_stop, _decision = auto_stop.on_unavailable(self._auto_stop)
             else:
                 players = list(sample.players)
                 self._player_data = "ok"
@@ -537,10 +521,7 @@ class Supervisor:
         stop_now = False
         revalidate = False
         with self._state_lock:
-            if (
-                self._state != LifecycleState.RUNNING
-                or self._generation != generation
-            ):
+            if self._state != LifecycleState.RUNNING or self._generation != generation:
                 self._auto_stop = auto_stop.cancelled(self._auto_stop)
                 return []
             self._auto_stop, decision = auto_stop.on_expiry(

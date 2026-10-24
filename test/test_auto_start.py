@@ -4,6 +4,8 @@ and committed lifecycle subscriptions.
 """
 
 import logging
+import socket
+import threading
 import types
 from unittest.mock import MagicMock, patch
 
@@ -154,6 +156,42 @@ class TestAutoStartSocketHandling:
         result = manager.wait_for_player_connection()
         assert result is False
 
+    def test_socket_timeout_keeps_listening(self, mock_settings):
+        manager = AutoStartManager(None, EventBus())
+        manager.sock = MagicMock()
+        manager.sock.recvfrom.side_effect = [
+            socket.timeout(),
+            (FIRST_PACKET_PATTERN, ("127.0.0.1", 12345)),
+        ]
+
+        assert manager.wait_for_player_connection() is True
+        assert manager.sock.recvfrom.call_count == 2
+
+    def test_idle_listener_thread_exits_on_close(self, mock_settings):
+        mock_settings.palworldServerPort = 0
+        manager = AutoStartManager(None, EventBus())
+        assert manager.open_palworld_port_socket() is True
+        assert manager.sock.gettimeout() == 0.2
+        thread = threading.Thread(target=manager.wait_for_player_connection)
+        manager.listen_thread = thread
+        thread.start()
+
+        try:
+            manager.close()
+            assert not thread.is_alive()
+        finally:
+            manager.close_palworld_port_socket()
+            thread.join(timeout=1)
+
+    def test_listener_start_does_not_sleep_on_the_calling_thread(self, mock_settings):
+        manager = AutoStartManager(None, EventBus())
+
+        with patch("src.auto_start.time.sleep") as sleep:
+            manager.listen_palworld_access()
+            manager.close()
+
+        sleep.assert_not_called()
+
     def test_closed_socket_is_not_an_error(self, mock_settings, caplog):
         """A listener socket closed by stop_listen_thread (server started
         manually) must not log an error with traceback."""
@@ -241,7 +279,9 @@ class TestAutoStartSocketHandling:
         manager = AutoStartManager(controller, EventBus())
 
         with (
-            patch.object(manager, "open_palworld_port_socket", return_value=True) as open_mock,
+            patch.object(
+                manager, "open_palworld_port_socket", return_value=True
+            ) as open_mock,
             patch.object(manager, "close_palworld_port_socket"),
             patch.object(manager, "wait_for_player_connection", return_value=True),
         ):

@@ -17,7 +17,7 @@ import platform
 import subprocess
 import threading
 import time
-from typing import Callable, Optional
+from typing import Optional
 
 import psutil
 
@@ -26,19 +26,13 @@ from src.settings import settings
 
 
 class OSProcessManager:
-    def __init__(self, on_exit: Optional[Callable[[ProcessIdentity], None]] = None):
+    def __init__(self):
         self._lock = threading.Lock()
         self._identity: Optional[ProcessIdentity] = None
-        self._on_exit = on_exit
-        self._closing = threading.Event()
-        self._watchdog_thread: Optional[threading.Thread] = None
         self._load_identity_from_file()
 
     def pid_file_name(self):
         raise NotImplementedError
-
-    def set_exit_callback(self, callback: Callable[[ProcessIdentity], None]):
-        self._on_exit = callback
 
     @property
     def tracked_identity(self) -> Optional[ProcessIdentity]:
@@ -169,12 +163,14 @@ class OSProcessManager:
     def launch_process(self, _exe_path, _exe_args) -> Optional[ProcessIdentity]:
         raise NotImplementedError
 
-    def terminate_process(self, expected: Optional[ProcessIdentity] = None) -> Optional[bool]:
+    def terminate_process(
+        self, expected: Optional[ProcessIdentity] = None
+    ) -> Optional[bool]:
         """Terminate the tracked process, or confirm it is already gone.
 
         Returns True when the expected process is gone, False when it is still
-        running after a failed attempt, and None while an asynchronous shutdown
-        watchdog is still watching it.
+        running after a failed attempt, and None while shutdown is pending.
+        The runtime's process detection observes pending shutdowns.
         """
         with self._lock:
             current = self._identity
@@ -213,23 +209,6 @@ class OSProcessManager:
             return False
         except Exception:
             return False
-
-    def close(self):
-        self._closing.set()
-        watchdog = self._watchdog_thread
-        if (
-            watchdog is not None
-            and watchdog.is_alive()
-            and watchdog is not threading.current_thread()
-        ):
-            watchdog.join(timeout=5)
-
-    def _notify_exit(self, identity: ProcessIdentity):
-        if self._on_exit is not None:
-            try:
-                self._on_exit(identity)
-            except Exception:
-                logging.exception("Process exit callback failed")
 
 
 class WindowsProcessManager(OSProcessManager):
@@ -287,14 +266,11 @@ class LGSMProcessManager(OSProcessManager):
 
     STARTUP_TIMEOUT = 30
     STARTUP_POLL_INTERVAL = 1
-    SHUTDOWN_VERIFY_TIMEOUT = 30
-    SHUTDOWN_VERIFY_POLL_INTERVAL = 1
-    SHUTDOWN_WATCHDOG_POLL_INTERVAL = 3
     LGSM_COMMAND_TIMEOUT = 120
 
-    def __init__(self, on_exit=None):
+    def __init__(self):
         self._exe_path = None
-        super().__init__(on_exit=on_exit)
+        super().__init__()
 
     def pid_file_name(self):
         return "palworld_server.lgsm.pid"
@@ -343,7 +319,9 @@ class LGSMProcessManager(OSProcessManager):
         self.set_known_identity(identity)
         return identity
 
-    def terminate_process(self, expected: Optional[ProcessIdentity] = None) -> Optional[bool]:
+    def terminate_process(
+        self, expected: Optional[ProcessIdentity] = None
+    ) -> Optional[bool]:
         with self._lock:
             current = self._identity
             exe_path = self._exe_path or settings.palworldServerExePath
@@ -361,50 +339,17 @@ class LGSMProcessManager(OSProcessManager):
         # genuinely shutting down (Palworld's save-on-shutdown can run long).
         command_ok = self._run_lgsm_command(exe_path, "stop")
 
-        if self._wait_for_identity_gone(
-            current, self.SHUTDOWN_VERIFY_TIMEOUT, self.SHUTDOWN_VERIFY_POLL_INTERVAL
-        ):
+        if not self.identity_is_running(current):
             self.clear_identity(current)
             return True
 
-        # Don't give up here: if we did, the supervisor would stay in STOPPING
-        # until the next detection poll. Keep watching in the background and
-        # report the exit as an observation.
+        # Keep tracking for the runtime's existing detection worker.
         logging.warning(
-            f"LGSM 'stop' hasn't confirmed PID {current.pid} is gone after "
-            f"{self.SHUTDOWN_VERIFY_TIMEOUT}s (command "
+            f"LGSM 'stop' hasn't confirmed PID {current.pid} is gone (command "
             f"{'completed' if command_ok else 'failed/timed out'}); "
-            "continuing to watch for it in the background."
+            "waiting for process detection to confirm the exit."
         )
-        watchdog = threading.Thread(
-            target=self._watch_for_termination,
-            args=(current,),
-            name="palworld-lgsm-watchdog",
-            daemon=True,
-        )
-        self._watchdog_thread = watchdog
-        watchdog.start()
         return None
-
-    def _wait_for_identity_gone(
-        self, identity: ProcessIdentity, timeout: float, interval: float
-    ) -> bool:
-        deadline = time.monotonic() + timeout
-        while self.identity_is_running(identity):
-            if self._closing.is_set() or time.monotonic() >= deadline:
-                return False
-            time.sleep(interval)
-        return True
-
-    def _watch_for_termination(self, identity: ProcessIdentity):
-        while self.identity_is_running(identity):
-            if self._closing.wait(self.SHUTDOWN_WATCHDOG_POLL_INTERVAL):
-                return
-        logging.info(
-            f"LGSM background watchdog confirmed PID {identity.pid} has exited."
-        )
-        if self.clear_identity(identity):
-            self._notify_exit(identity)
 
 
 def create_process_manager() -> OSProcessManager:

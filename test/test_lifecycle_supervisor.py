@@ -11,7 +11,6 @@ from src.lifecycle.messages import (
     LaunchResult,
     LifecycleState,
     PollRequest,
-    ProcessExit,
     ProcessIdentity,
     ProcessObservation,
     ProcessSnapshot,
@@ -105,9 +104,15 @@ def env(mock_settings, tmp_path):
     supervisor.server_starting_cooldown = 0
     supervisor.server_stopping_cooldown = 0
     events = []
-    bus.subscribe(Event.SERVER_STARTED, lambda d: events.append((Event.SERVER_STARTED, d)))
-    bus.subscribe(Event.SERVER_STOPPED, lambda d: events.append((Event.SERVER_STOPPED, d)))
-    bus.subscribe(Event.SERVER_STATUS, lambda d: events.append((Event.SERVER_STATUS, d)))
+    bus.subscribe(
+        Event.SERVER_STARTED, lambda d: events.append((Event.SERVER_STARTED, d))
+    )
+    bus.subscribe(
+        Event.SERVER_STOPPED, lambda d: events.append((Event.SERVER_STOPPED, d))
+    )
+    bus.subscribe(
+        Event.SERVER_STATUS, lambda d: events.append((Event.SERVER_STATUS, d))
+    )
     bus.subscribe(
         Event.LIFECYCLE_CHANGED,
         lambda d: events.append((Event.LIFECYCLE_CHANGED, d)),
@@ -248,7 +253,9 @@ class TestSupervisor:
 
         env.pm.alive.discard(identity.pid)
         env.pm.found = None
-        env.supervisor.handle(ProcessExit(identity))
+        env.supervisor.handle(
+            ProcessObservation(env.supervisor.generation, env.pm.observe())
+        )
         assert env.supervisor.state == LifecycleState.STOPPED
 
     def test_start_guard_blocks_an_unadopted_found_process(self, env):

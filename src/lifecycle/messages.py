@@ -87,11 +87,6 @@ class StopResult:
     stopped: Optional[bool]  # True=gone, False=failed, None=pending shutdown
 
 
-@dataclass(frozen=True)
-class ProcessExit:
-    identity: ProcessIdentity
-
-
 class Command:
     def __init__(self):
         self.done = threading.Event()
