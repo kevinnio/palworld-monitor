@@ -131,7 +131,16 @@ class AutoStartManager:
                 if self._is_player_connection_packet(data):
                     logging.info("A player is attempting to connect. Starting Palworld Server...")
                     return True
-            except (OSError, Exception) as e:
+            except OSError as e:
+                # Closing the socket from another thread (server started
+                # manually) is the normal way this listener shuts down.
+                if self.is_aborting:
+                    logging.debug(f"Auto-start listener closed: {e}")
+                    return False
+                logging.error(f"Error in wait_for_player_connection: {e}")
+                logging.error(traceback.format_exc())
+                return False
+            except Exception as e:
                 logging.error(f"Error in wait_for_player_connection: {e}")
                 logging.error(traceback.format_exc())
                 return False

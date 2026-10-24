@@ -3,6 +3,7 @@ Extended tests for AutoStartManager covering packet detection, socket handling,
 and event subscriptions.
 """
 
+import logging
 import types
 from unittest.mock import MagicMock, patch
 from src.auto_start import AutoStartManager
@@ -130,6 +131,24 @@ class TestAutoStartSocketHandling:
         manager.is_aborting = True
         result = manager.wait_for_player_connection()
         assert result is False
+
+    def test_closed_socket_is_not_an_error(self, mock_settings, caplog):
+        """A listener socket closed by stop_listen_thread (server started
+        manually) must not log an error with traceback."""
+        manager = AutoStartManager(None)
+
+        def recvfrom_closing(_size):
+            manager.is_aborting = True  # what close_palworld_port_socket does
+            raise OSError(10038, "not a socket")
+
+        manager.sock = MagicMock()
+        manager.sock.recvfrom.side_effect = recvfrom_closing
+
+        with caplog.at_level(logging.DEBUG):
+            result = manager.wait_for_player_connection()
+
+        assert result is False
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
     def test_listen_palworld_access_core_server_running(self, mock_settings):
         """Test listen_palworld_access_core when server is already running."""
