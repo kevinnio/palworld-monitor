@@ -11,7 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.process_manager import LGSMProcessManager, ProcessIdentity
+from src.lifecycle.messages import ProcessIdentity
+from src.process_manager import LGSMProcessManager
 
 
 @pytest.fixture

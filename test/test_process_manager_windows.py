@@ -9,7 +9,8 @@ import os
 import pytest
 import time
 import psutil
-from src.process_manager import ProcessIdentity, WindowsProcessManager
+from src.lifecycle.messages import ProcessIdentity
+from src.process_manager import WindowsProcessManager
 from test.support import get_python_executable
 
 # Skip all tests if not on Windows

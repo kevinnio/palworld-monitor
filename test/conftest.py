@@ -86,7 +86,8 @@ def mock_settings(monkeypatch):
 
     # Patch settings import in all modules that use it
     monkeypatch.setattr("src.api_clients.settings", mock)
-    monkeypatch.setattr("src.palworld_control.settings", mock)
+    monkeypatch.setattr("src.lifecycle.supervisor.settings", mock)
+    monkeypatch.setattr("src.lifecycle.runtime.settings", mock)
     monkeypatch.setattr("src.auto_start.settings", mock)
     monkeypatch.setattr("src.player_manager.settings", mock)
     monkeypatch.setattr("src.banlist_manager.settings", mock)

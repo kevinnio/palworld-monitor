@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from src.auto_start import AutoStartManager
 from src.events import Event, EventBus
-from src.palworld_control import LifecycleState
+from src.lifecycle.messages import LifecycleState
 from src.settings import settings
 
 FIRST_PACKET_PATTERN = b"\x09\x08\x00"

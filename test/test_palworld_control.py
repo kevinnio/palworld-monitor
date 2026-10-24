@@ -1,4 +1,4 @@
-"""Behavior-level tests for the single-writer lifecycle supervisor."""
+"""Integration and facade tests for PalWorldController."""
 
 import threading
 import time
@@ -9,9 +9,10 @@ from unittest.mock import MagicMock
 
 from src.banlist_manager import BanlistManager
 from src.events import Event, EventBus
-from src.palworld_control import LifecycleState, PalWorldController
+from src.lifecycle.messages import LifecycleState, ProcessIdentity, ProcessSnapshot
+from src.palworld_control import PalWorldController
 from src.player_manager import PlayerManager
-from src.process_manager import ProcessIdentity, ProcessSnapshot
+
 
 
 class FakeClock:
@@ -227,16 +228,16 @@ def harness(mock_settings, tmp_path):
         bus=bus,
         clock=clock,
     )
-    controller.server_starting_cooldown = 0
-    controller.server_stopping_cooldown = 0
-    controller.poll_interval = 0
+    controller._supervisor.server_starting_cooldown = 0
+    controller._supervisor.server_stopping_cooldown = 0
+    controller._supervisor.poll_interval = 0
 
     h = Harness(bus, client, process_manager, players, bans, clock, controller)
     yield h
     h.close()
 
 
-class TestLifecycleSupervisor:
+class TestPalWorldController:
     def test_constructor_does_not_start_workers(self, harness):
         assert not any(
             thread.name in CONTROLLER_THREAD_NAMES for thread in threading.enumerate()
@@ -287,11 +288,11 @@ class TestLifecycleSupervisor:
         harness.start_with_process()
         wait_until(lambda: harness.controller.get_snapshot()["playerData"] == "ok")
 
+        harness.client.players = [["P2", "uid2", "222", "20"]]
         harness.pm.terminate_result = False
         assert harness.controller.stop_server() is True
         wait_until(lambda: harness.controller.state == LifecycleState.RUNNING)
 
-        harness.client.players = [["P2", "uid2", "222", "20"]]
         wait_until(
             lambda: any(
                 player["steam_id"] == "222" and player["currently_online"]
@@ -320,7 +321,7 @@ class TestLifecycleSupervisor:
     def test_blocked_rest_at_deadline_does_not_stop_on_an_old_empty_sample(
         self, harness
     ):
-        from src.palworld_control import settings as controller_settings
+        from src.lifecycle.supervisor import settings as controller_settings
 
         controller_settings.autoStop = True
         harness.client.players = []
@@ -329,7 +330,7 @@ class TestLifecycleSupervisor:
 
         # Pass the startup guard so a later empty sample arms the deadline.
         harness.clock.advance(31)
-        wait_until(lambda: harness.controller._auto_stop_deadline is not None)
+        wait_until(lambda: harness.controller._supervisor.auto_stop_deadline is not None)
 
         # A poll is already in flight when the deadline expires.
         harness.client.entered.clear()
@@ -352,14 +353,14 @@ class TestLifecycleSupervisor:
         assert harness.controller.state == LifecycleState.RUNNING
 
     def test_auto_stop_waits_for_a_fresh_empty_sample_to_confirm(self, harness):
-        from src.palworld_control import settings as controller_settings
+        from src.lifecycle.supervisor import settings as controller_settings
 
         controller_settings.autoStop = True
         harness.client.players = []
         harness.start_with_process()
         wait_until(lambda: harness.controller.get_snapshot()["playerData"] == "ok")
         harness.clock.advance(31)
-        wait_until(lambda: harness.controller._auto_stop_deadline is not None)
+        wait_until(lambda: harness.controller._supervisor.auto_stop_deadline is not None)
 
         harness.client.entered.clear()
         harness.client.block = threading.Event()
@@ -588,15 +589,15 @@ class TestLifecycleSupervisor:
 
     def test_rest_failure_keeps_roster_and_cancels_auto_stop(self, harness):
         harness.clock.now = 1000.0
-        harness.controller.last_server_started_time = 0.0
-        harness.controller.server_starting_cooldown = 0
-        harness.controller.server_stopping_cooldown = 0
+        harness.controller._supervisor.last_server_started_time = 0.0
+        harness.controller._supervisor.server_starting_cooldown = 0
+        harness.controller._supervisor.server_stopping_cooldown = 0
         harness.client.players = [["P1", "uid1", "111", "10"]]
         harness.start_with_process()
         wait_until(lambda: harness.controller.get_snapshot()["playerData"] == "ok")
 
         # Enable auto-stop after the server is up and the roster is known.
-        from src.palworld_control import settings as controller_settings
+        from src.lifecycle.supervisor import settings as controller_settings
 
         controller_settings.autoStop = True
 
@@ -632,7 +633,7 @@ class TestLifecycleSupervisor:
         wait_until(lambda: harness.controller.state == LifecycleState.STOPPED)
 
     def test_old_auto_stop_deadline_cannot_stop_a_restarted_generation(self, harness):
-        from src.palworld_control import settings as controller_settings
+        from src.lifecycle.supervisor import settings as controller_settings
 
         controller_settings.autoStop = True
         harness.client.players = []
@@ -742,7 +743,7 @@ def test_moderation_reports_api_and_storage_failures(
 
 
 def settings_auto_stop_delay(harness):
-    from src.palworld_control import settings as controller_settings
+    from src.lifecycle.supervisor import settings as controller_settings
 
     return controller_settings.autoStopDelay
 

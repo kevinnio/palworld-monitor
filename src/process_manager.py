@@ -17,36 +17,12 @@ import platform
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
 from typing import Callable, Optional
 
 import psutil
 
+from src.lifecycle.messages import ProcessIdentity, ProcessSnapshot
 from src.settings import settings
-
-
-@dataclass(frozen=True)
-class ProcessIdentity:
-    """A process we own, identified by PID and (when available) creation time."""
-
-    pid: int
-    create_time: Optional[float] = None
-
-    def matches(self, other: Optional["ProcessIdentity"]) -> bool:
-        if other is None or self.pid != other.pid:
-            return False
-        if self.create_time is not None and other.create_time is not None:
-            return abs(self.create_time - other.create_time) < 0.01
-        return True
-
-
-@dataclass(frozen=True)
-class ProcessSnapshot:
-    """One I/O observation of the tracked and any discovered PalServer process."""
-
-    tracked: Optional[ProcessIdentity]
-    tracked_running: bool
-    found: Optional[ProcessIdentity]
 
 
 class OSProcessManager:

@@ -16,7 +16,8 @@
 import socket
 from src.events import EventBus, Event
 from src.settings import settings
-from src.palworld_control import LifecycleState, PalWorldController
+from src.lifecycle.messages import LifecycleState
+from src.palworld_control import PalWorldController
 import logging
 import threading
 import traceback
