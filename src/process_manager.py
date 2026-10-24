@@ -112,6 +112,10 @@ class OSProcessManager:
                 f"{new_pid} (likely restarted outside palworld-monitor)."
             )
             self.set_known_pid(new_pid)
+            # Announce the adoption like a launch: without it nothing starts
+            # status polling for the replacement, so the app would sit at
+            # "offline" until that server stops too.
+            bus.publish(Event.SERVER_STARTED, {"pid": new_pid})
             return True
         return False
 

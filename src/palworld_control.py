@@ -335,6 +335,11 @@ class PalWorldController:
         return self.banlist_manager.is_banned(steam_id)
 
     def start_server_info_update_thread(self):
+        if self.update_thread is threading.current_thread():
+            # Announced from the poll loop itself (server adopted mid-poll):
+            # keep this loop alive instead of failing to spawn a second one.
+            self.update_thread_stop_event.clear()
+            return
         if not (self.update_thread and self.update_thread.is_alive()):
             self.update_thread_stop_event.clear()
             self.update_thread = threading.Thread(

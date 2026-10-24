@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import psutil
 import pytest
 
+from src.events import Event
 from src.process_manager import LGSMProcessManager
 
 
@@ -195,9 +196,10 @@ class TestIsProcessRunningPidRecovery:
     by a new one outside palworld-monitor's control (e.g. an LGSM/Steam
     update cron restarting the server without going through start/stop)."""
 
+    @patch("src.process_manager.bus.publish")
     @patch("src.process_manager.psutil.Process")
     def test_recovers_when_tracked_pid_gone_and_replacement_found(
-        self, mock_process_cls, manager
+        self, mock_process_cls, mock_publish, manager
     ):
         manager.launched_pid = 111
         manager._save_pid_to_file(111)
@@ -211,6 +213,9 @@ class TestIsProcessRunningPidRecovery:
         with open(manager.pid_file_name(), "r") as f:
             assert f.read().strip() == "222"
         os.remove(manager.pid_file_name())
+        # Adopting a replacement must be announced, or nothing starts
+        # status polling for it and the app sits at "offline".
+        mock_publish.assert_called_once_with(Event.SERVER_STARTED, {"pid": 222})
 
     @patch("src.process_manager.psutil.Process")
     def test_stays_offline_when_no_replacement_found(self, mock_process_cls, manager):

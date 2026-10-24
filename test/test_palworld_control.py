@@ -3,6 +3,7 @@ Tests for the PalWorldController module.
 """
 
 import pytest
+import threading
 from unittest.mock import patch
 from src.palworld_control import PalWorldController
 from test.support import create_mock_api_client
@@ -479,3 +480,19 @@ class TestPalWorldController:
         )
         controller._handle_auto_stop_condition()
         assert controller.auto_stop_delay_thread is None
+
+    def test_adoption_announcement_keeps_poll_loop_alive(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        """An adopted server announces SERVER_STARTED from the poll thread
+        itself, while its stop event is set. Spawning a second thread would
+        fail (one is already alive), so the loop must stay alive instead."""
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
+        controller.update_thread = threading.current_thread()
+        controller.update_thread_stop_event.set()
+        with patch("src.palworld_control.threading.Thread") as mock_thread:
+            controller.start_server_info_update_thread()
+        assert controller.update_thread_stop_event.is_set() is False
+        mock_thread.assert_not_called()
