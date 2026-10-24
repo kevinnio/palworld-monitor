@@ -31,7 +31,7 @@ Run the ones matching changed areas, plus at least two unrelated ones.
 | E3 | auto-start | UDP probe starts the server | With the app STOPPED, send `09 08 00` to UDP 8211 | Server starts; dashboard goes RUNNING |
 | E4 | process/lifecycle | External crash | Kill the dummy process while RUNNING | Dashboard goes OFF; players offline; auto-start listener re-arms |
 | E5 | REST/lifecycle | REST unavailable, process alive | Make REST unavailable with a running dummy; enable auto-stop and wait past guard+delay | State stays RUNNING; `playerData=unavailable`; last-known roster preserved with an unavailable warning, not replaced by an authoritative empty roster; no auto-stop |
-| E6 | auto-stop | Empty roster auto-stops | Dummy with `DUMMY_PLAYER_COUNT=0`; autoStop enabled; wait past guard+delay | Server stops; dashboard OFF; dummy process gone |
+| E6 | auto-stop | Empty roster auto-stops | After monitor startup cleanup, launch a dummy with `DUMMY_PLAYER_COUNT=0`; confirm it is alive and RUNNING with a healthy empty roster; wait past guard+delay without sending stop | Committed states progress through STOPPING to STOPPED; the owned dummy exits only after the startup guard; a setup kill or crash cannot count as a pass |
 | E7 | web/SSE | Stale snapshot ignored | Apply an older revision snapshot in page JS | Dashboard does not regress; no stale player appears |
 | E8 | auth | Invalid login | One wrong password attempt | Error shown; session not created; do not exceed the lockout limit |
 | E9 | auth | Logout | Click Logout | Redirected to login; protected page requires login again |
