@@ -28,7 +28,9 @@ ps aux | grep -E 'src\.main|PalServer' | grep -v grep || true
 ```
 
 If a real PalServer or another monitor instance is present, stop and ask the
-user before doing anything destructive.
+user before doing anything destructive. If only dummy servers remain, stop all
+verified dummy instances using the cleanup procedure below before starting QA.
+Otherwise discovery may adopt an old dummy and invalidate the results.
 
 ## Temp settings
 
@@ -144,23 +146,63 @@ Alternatively, use the page's own fetch/API path with the CSRF token from
 
 ## Cleanup
 
-Stop only the processes started for QA, identified by their command line:
+Clean up even if a scenario fails or the run is interrupted:
 
-```powershell
-Get-CimInstance Win32_Process |
-  Where-Object { $_.CommandLine -like '*src.main*' -or $_.CommandLine -like '*PalServer-Dummy.py*' } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+1. Stop the QA monitor first using its recorded PID and verified children. Do
+   not stop another monitor by matching every `src.main` command.
+2. Stop **all remaining verified dummy servers**, including leftovers from
+   earlier runs, not just those started in the current run. Identify them by an
+   exact `PalServer-Dummy.py` script argument. Include any exact temporary dummy
+   wrapper paths recorded during this run. Never kill all Python processes or
+   match `PalServer` broadly, which could hit a real server.
+3. On Windows, stop both the venv launcher shim and real Python child. Terminate
+   verified processes, wait for exit, then kill only verified survivors if needed.
+   Rescan afterward. Stopping one parent or deleting a PID file is not cleanup.
+4. Confirm no matching dummy processes remain and no QA-owned TCP/UDP listeners
+   remain on 8211, 8212, or 8213. If a port belongs to an unrelated process, leave
+   it alone and report it. Report cleanup failures rather than claiming success.
+
+For example, run this Python through the project venv after stopping the QA
+monitor. Add any temporary dummy wrapper's absolute path to `wrapper_paths`:
+
+```python
+import os
+from pathlib import Path
+
+import psutil
+
+wrapper_paths = set()
+wrapper_paths = {os.path.normcase(os.path.abspath(p)) for p in wrapper_paths}
+
+def is_dummy(process):
+    try:
+        args = process.cmdline()
+        return any(
+            Path(arg).name.casefold() == "palserver-dummy.py"
+            or os.path.normcase(os.path.abspath(arg)) in wrapper_paths
+            for arg in args[1:]
+        )
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
+
+targets = [p for p in psutil.process_iter() if is_dummy(p)]
+print("Stopping verified dummy PIDs:", [p.pid for p in targets])
+for process in targets:
+    try:
+        process.terminate()
+    except psutil.NoSuchProcess:
+        pass
+_, survivors = psutil.wait_procs(targets, timeout=5)
+for process in survivors:
+    if is_dummy(process):
+        process.kill()
+psutil.wait_procs(survivors, timeout=5)
+remaining = [p.pid for p in psutil.process_iter() if is_dummy(p)]
+assert not remaining, f"Dummy servers still running: {remaining}"
 ```
 
-Linux/macOS (check the matches first, then stop only those PIDs):
-
-```bash
-pgrep -af 'src\.main|PalServer-Dummy\.py'
-pkill -f 'src\.main'
-pkill -f 'PalServer-Dummy\.py'
-```
-
-Then remove QA artifacts created in the project:
+Then remove only QA artifacts created by this run. Prefer running from a temp
+working directory so existing project data never needs to be overwritten:
 
 - `data/players.json` (and `data/` if empty)
 - `.venv/Scripts/banlist.txt` (or the configured banlist path)

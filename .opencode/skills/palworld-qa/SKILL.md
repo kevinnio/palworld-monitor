@@ -32,8 +32,12 @@ Rules that matter:
 - Never kill or disturb a real PalServer. Check ports/processes first.
 - Do not run `uv run poe smoke` or any e2e suite unless the user explicitly asks;
   those tests are destructive.
-- Use a temporary settings file and the dummy PalServer. Clean up the app,
-  dummy, temp data, and browser tab when finished.
+- Use a temporary settings file and the dummy PalServer. Stop leftover dummy
+  servers before testing so discovery cannot adopt an old instance.
+- Always stop all remaining verified dummy servers when finished, including
+  leftovers from earlier runs and Windows launcher shims/children. Stop only the
+  monitor instance you started. Verify no dummy processes or QA port owners
+  remain before deleting temp data and closing your browser tab.
 - Log in with the web credentials you set in the temp settings.
 
 ## 3. Refresh the QA catalog before testing
@@ -111,13 +115,17 @@ Include:
 - new or changed scenarios added to the catalog;
 - any risk not covered (LGSM/Linux, real PalServer, e2e).
 
+Report run results in chat. Keep any saved evidence in the OS temp directory or
+the skill's ignored `results/` directory, not in committed files.
+
 ## 7. Update the catalog and mark verified
 
 After the run:
 
-1. Update `references/qa-checklist.md` with any new/refined scenarios and a
-   `Last verified` line (date + commit + short note).
-2. Mark the current commit verified:
+1. Update `references/qa-checklist.md` with reusable new/refined scenarios only.
+   Do not add run outcomes, dates, commit IDs, or verification notes.
+2. Mark the current commit verified in the ignored local
+   `references/qa-state.json` file:
 
 ```bash
 uv run python .opencode/skills/palworld-qa/scripts/qa_delta.py --mark-verified
@@ -134,4 +142,8 @@ as features and behavior evolve.
 - Do not run destructive e2e/smoke suites.
 - Do not disturb a real PalServer or the user's browser tabs.
 - Do not hide a failure behind a passing happy path.
-- Do not leave the app, dummy server, temp data, or browser tab running.
+- Never commit QA results, screenshots, logs, or local verification state. Commit
+  only reusable skill instructions, scenarios, and supporting tools.
+- Do not leave the QA app, any verified dummy servers, temp data, or browser tab
+  running, even after a failed or interrupted scenario. Never substitute a broad
+  Python/PalServer process kill for exact dummy-script identification.
