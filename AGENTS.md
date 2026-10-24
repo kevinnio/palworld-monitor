@@ -31,9 +31,10 @@ Explore the project before making changes. Uses `uv` for dependencies and comman
 
 ## Testing
 
-- Unit tests in `test/`, fixtures in `test/conftest.py`.
+- Unit tests in `test/`, integration tests in `test/integration/`, shared fixtures in `test/conftest.py`. `uv run poe test` runs both suites.
+- Integration coverage includes native process backends, LGSM, controller/runtime wiring, and Flask request flows. Browser tests remain in `test/e2e/`.
 - Lifecycle tests use inactive controllers with fake process managers/clients, a fake monotonic clock and an injected `EventBus`; `PlayerManager`/`BanlistManager` write to `tmp_path`. They call `start()`/`close()` explicitly and do not clear global bus subscribers.
-- Boundary tests: `test/test_lifecycle_supervisor.py` covers synchronous transitions/adoption/stale observations, `test/test_lifecycle_auto_stop.py` covers the pure policy, and `test/test_lifecycle_runtime.py` covers blocked I/O and cleanup. `test/test_palworld_control.py` keeps facade/integration coverage.
+- Boundary tests: `test/test_lifecycle_supervisor.py` covers synchronous transitions/adoption/stale observations, `test/test_lifecycle_auto_stop.py` covers the pure policy, and `test/integration/test_lifecycle_runtime.py` covers blocked I/O and cleanup. `test/integration/test_palworld_control.py` keeps facade/integration coverage. `test/integration/test_process_manager.py` shares native Windows/Linux process contracts. `test/integration/test_lgsm.py` runs a stand-in LGSM script and the dummy server on Linux.
 - E2E tests (`test/e2e/`) use a dummy PalServer (`test/e2e/dummy/PalServer-Dummy.py`) — no real server needed, but they are destructive: they kill any PalServer process and free ports 8211–8213. Do not run them on a machine running a real PalServer.
 - Manual QA scenarios and live-server rules live in `.agents/skills/palworld-qa/`.
 

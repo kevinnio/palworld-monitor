@@ -12,6 +12,7 @@ from src.events import Event, EventBus
 from src.lifecycle.messages import LifecycleState, ProcessIdentity, ProcessSnapshot
 from src.palworld_control import PalWorldController
 from src.player_manager import PlayerManager
+from test.support import wait_until
 
 
 class FakeClock:
@@ -186,15 +187,6 @@ CONTROLLER_THREAD_NAMES = {
     "palworld-poll",
     "palworld-process",
 }
-
-
-def wait_until(predicate, timeout=3.0, message="condition not met"):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return
-        time.sleep(0.01)
-    assert predicate(), message
 
 
 @pytest.fixture

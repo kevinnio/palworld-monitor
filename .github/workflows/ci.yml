@@ -32,7 +32,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --python ${{ matrix.python-version }}
 
-      - name: Run unit tests
+      - name: Run unit and integration tests
         run: uv run poe test
 
       - name: Install Playwright browsers

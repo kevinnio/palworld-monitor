@@ -16,6 +16,7 @@ from src.lifecycle.messages import (
 from src.lifecycle.runtime import LifecycleRuntime
 from src.lifecycle.supervisor import Supervisor
 from src.player_manager import PlayerManager
+from test.support import wait_until
 from test.test_lifecycle_supervisor import FakeClock, FakeProcessManager
 
 CONTROLLER_THREAD_NAMES = {
@@ -52,15 +53,6 @@ class FakeClient:
 
     def unban_player(self, player):
         return True
-
-
-def wait_until(predicate, timeout=3.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return
-        time.sleep(0.01)
-    assert predicate()
 
 
 @pytest.fixture

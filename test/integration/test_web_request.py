@@ -1,5 +1,5 @@
 """
-Request-level tests for PalWorld Monitor web interface.
+Request-level integration tests for PalWorld Monitor web interface.
 
 These tests use Flask's test client to exercise the full HTTP request/response pipeline,
 including template rendering, session management, CSRF protection, and all API routes.
@@ -180,12 +180,8 @@ class TestIndexPageRendering:
             response.data
         )
 
-    def test_auto_stop_notice_visible_when_running(
-        self, auth_client, web_app_factory
-    ):
-        snapshot = dict(
-            web_app_factory.palworld_controller.get_snapshot.return_value
-        )
+    def test_auto_stop_notice_visible_when_running(self, auth_client, web_app_factory):
+        snapshot = dict(web_app_factory.palworld_controller.get_snapshot.return_value)
         snapshot["state"] = "RUNNING"
         web_app_factory.palworld_controller.get_snapshot.return_value = snapshot
 

@@ -56,6 +56,12 @@ Run e2e smoke tests with `uv run poe smoke`. **Do not run smoke tests
 while a real PalServer is running** — they kill all PalServer processes
 and occupy game ports to isolate the test environment.
 
+`uv run poe test` runs unit tests and the integration tests in `test/integration/`.
+Run only integration tests with `uv run poe test test/integration`.
+The Linux-only LGSM tests execute a stand-in script and the dummy server,
+not actual LinuxGSM or Palworld. They skip if a PalServer is running or
+port 8212 is already in use.
+
 ## Configuration
 
 After first run, a `settings.yaml` file is saved next to the app.  You can edit
