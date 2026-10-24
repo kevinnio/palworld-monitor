@@ -247,6 +247,8 @@ class PalWorldController:
             self.player_manager.update_players_from_server(players)
 
     def _handle_auto_stop_condition(self):
+        if not self.current_server_info["running"]:
+            return
         if self.auto_stop_delay_thread and self.auto_stop_delay_thread.is_alive():
             return
         if time.time() - self.last_server_started_time < 30:

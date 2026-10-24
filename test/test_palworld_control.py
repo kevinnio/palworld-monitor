@@ -397,3 +397,13 @@ class TestPalWorldController:
         )
         controller._update_server_info_with_players()
         mock_player_manager.update_players_from_server.assert_called_once_with([])
+
+    def test_auto_stop_skipped_when_server_not_running(
+        self, mock_settings, mock_client, mock_process_manager
+    ):
+        mock_process_manager.is_process_running.return_value = False
+        controller = PalWorldController(
+            client=mock_client, process_manager=mock_process_manager
+        )
+        controller._handle_auto_stop_condition()
+        assert controller.auto_stop_delay_thread is None
