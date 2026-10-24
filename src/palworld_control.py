@@ -92,6 +92,11 @@ class PalWorldController:
         self.last_server_stopped_time = time.time()
         logging.debug("Controller: Server stopped event received")
         self.stop_server_info_update_thread()
+        # Release tracked players here, not only on the next poll: the poll
+        # thread stops with the event, so otherwise players would stay
+        # "online" in PlayerManager (and on disk) after a stop.
+        if settings.enablePlayerTracking:
+            self.player_manager.update_players_from_server([])
         self._start_detection_loop()
 
     def _on_server_status(self, data):

@@ -396,6 +396,18 @@ class TestPalWorldController:
             [["P1", "p1", "u1", "10"]]
         )
 
+    def test_server_stopped_releases_tracked_players(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        """Deterministic ghost-player release on the stop event, regardless
+        of poll phase."""
+        mock_process_manager.is_process_running.return_value = False
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
+        controller._on_server_stopped({})
+        mock_player_manager.update_players_from_server.assert_called_once_with([])
+
     def test_auto_stop_still_arms_when_running_with_no_players(
         self, mock_settings, mock_client, mock_process_manager
     ):
