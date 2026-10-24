@@ -327,7 +327,8 @@ class TestPalWorldController:
 
     @patch("src.events.bus.publish")
     def test_process_reacquired_emits_no_stopped_event(
-        self, mock_publish, mock_settings, mock_client, mock_process_manager
+        self, mock_publish, mock_settings, mock_client, mock_process_manager,
+        mock_player_manager,
     ):
         mock_process_manager.launched_pid = 1234
         mock_process_manager.is_process_running.return_value = True
@@ -434,7 +435,7 @@ class TestPalWorldController:
         mock_player_manager.update_players_from_server.assert_called_once_with([])
 
     def test_auto_stop_still_arms_when_running_with_no_players(
-        self, mock_settings, mock_client, mock_process_manager
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
     ):
         """Guard m1: the not-running skip must not disable auto-stop."""
         mock_process_manager.is_process_running.return_value = True
