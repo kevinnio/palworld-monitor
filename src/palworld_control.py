@@ -92,6 +92,11 @@ class PalWorldController:
         self.last_server_stopped_time = time.time()
         logging.debug("Controller: Server stopped event received")
         self.stop_server_info_update_thread()
+        # Release tracked players here, not only on the next poll: the poll
+        # thread stops with the event, so otherwise players would stay
+        # "online" in PlayerManager (and on disk) after a stop.
+        if settings.enablePlayerTracking:
+            self.player_manager.update_players_from_server([])
         self._start_detection_loop()
 
     def _on_server_status(self, data):
@@ -236,14 +241,27 @@ class PalWorldController:
         )
 
     def _update_server_info_with_players(self):
-        self.current_server_info["running"] = self.is_palworld_process_running()
-        players = self.get_player_names()
+        pid_at_start = self.process_manager.launched_pid
+        running = self.is_palworld_process_running()
+        # Server down: skip the REST call and release tracked players, who
+        # would otherwise show as online forever after a stop.
+        players = self.get_player_names() if running else []
+        if running and (not self.is_palworld_process_running()
+                        or self.process_manager.launched_pid != pid_at_start):
+            # Server died mid-poll (or was replaced by a new process): a
+            # pre-stop roster landing after the stop event's release would
+            # resurrect ghost players.
+            running = False
+            players = []
+        self.current_server_info["running"] = running
         self.current_server_info["playerCount"] = len(players)
         self.current_server_info["players"] = players
         if settings.enablePlayerTracking:
             self.player_manager.update_players_from_server(players)
 
     def _handle_auto_stop_condition(self):
+        if not self.current_server_info["running"]:
+            return
         if self.auto_stop_delay_thread and self.auto_stop_delay_thread.is_alive():
             return
         if time.time() - self.last_server_started_time < 30:
@@ -317,6 +335,11 @@ class PalWorldController:
         return self.banlist_manager.is_banned(steam_id)
 
     def start_server_info_update_thread(self):
+        if self.update_thread is threading.current_thread():
+            # Announced from the poll loop itself (server adopted mid-poll):
+            # keep this loop alive instead of failing to spawn a second one.
+            self.update_thread_stop_event.clear()
+            return
         if not (self.update_thread and self.update_thread.is_alive()):
             self.update_thread_stop_event.clear()
             self.update_thread = threading.Thread(

@@ -3,6 +3,7 @@ Tests for the PalWorldController module.
 """
 
 import pytest
+import threading
 from unittest.mock import patch
 from src.palworld_control import PalWorldController
 from test.support import create_mock_api_client
@@ -269,14 +270,15 @@ class TestPalWorldController:
             mock_start.assert_called_once()
 
     def test_on_server_stopped_stops_update_thread(
-        self, mock_settings, mock_client, mock_process_manager
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
     ):
         mock_process_manager.is_process_running.return_value = False
-        controller = PalWorldController(
-            client=mock_client, process_manager=mock_process_manager
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
         )
         with patch.object(controller, "stop_server_info_update_thread") as mock_stop:
-            controller._on_server_stopped({"pid": 1234})
+            with patch.object(PalWorldController, "_start_detection_loop"):
+                controller._on_server_stopped({"pid": 1234})
             mock_stop.assert_called_once()
 
     def test_get_players_for_web_returns_player_manager_data(
@@ -298,22 +300,28 @@ class TestPalWorldController:
         players = controller.get_players_for_web()
         assert players == mock_player_manager.get_all_players.return_value
 
-    def _controller_for_transition_tests(self, mock_process_manager, mock_client):
+    def _controller_without_loop(
+        self, mock_process_manager, mock_client, mock_player_manager=None
+    ):
         """Controller without its background loop, for deterministic tests."""
+        kwargs = {"client": mock_client, "process_manager": mock_process_manager}
+        if mock_player_manager is not None:
+            kwargs["player_manager"] = mock_player_manager
         with patch.object(PalWorldController, "_start_detection_loop"):
-            return PalWorldController(client=mock_client, process_manager=mock_process_manager)
+            return PalWorldController(**kwargs)
 
     @patch("src.events.bus.publish")
     def test_process_gone_emits_server_stopped(
-        self, mock_publish, mock_settings, mock_client, mock_process_manager
+        self, mock_publish, mock_settings, mock_client, mock_process_manager,
+        mock_player_manager,
     ):
         """Regression for issue #6: a tracked process exiting outside the
         monitor (crash, closed window) must fire SERVER_STOPPED so the status
         poll loop halts and the auto-start listener re-arms."""
         mock_process_manager.launched_pid = 1234
         mock_process_manager.is_process_running.return_value = False
-        controller = self._controller_for_transition_tests(
-            mock_process_manager, mock_client
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
         )
         controller._check_tracked_process_gone()
         mock_publish.assert_called_once_with(Event.SERVER_STOPPED, {"pid": None})
@@ -321,12 +329,13 @@ class TestPalWorldController:
 
     @patch("src.events.bus.publish")
     def test_process_reacquired_emits_no_stopped_event(
-        self, mock_publish, mock_settings, mock_client, mock_process_manager
+        self, mock_publish, mock_settings, mock_client, mock_process_manager,
+        mock_player_manager,
     ):
         mock_process_manager.launched_pid = 1234
         mock_process_manager.is_process_running.return_value = True
-        controller = self._controller_for_transition_tests(
-            mock_process_manager, mock_client
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
         )
         controller._check_tracked_process_gone()
         mock_publish.assert_not_called()
@@ -334,24 +343,25 @@ class TestPalWorldController:
 
     @patch("src.events.bus.publish")
     def test_no_tracked_process_emits_no_stopped_event(
-        self, mock_publish, mock_settings, mock_client, mock_process_manager
+        self, mock_publish, mock_settings, mock_client, mock_process_manager,
+        mock_player_manager,
     ):
-        controller = self._controller_for_transition_tests(
-            mock_process_manager, mock_client
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
         )
         controller._check_tracked_process_gone()
         mock_publish.assert_not_called()
         mock_process_manager.clear_pid.assert_not_called()
 
     def test_detection_loop_keeps_watching_after_start(
-        self, mock_settings, mock_client, mock_process_manager
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
     ):
         """The loop must not exit once a process is tracked: it is also the
         watcher that notices the process disappearing."""
         mock_process_manager.launched_pid = 1234
         mock_process_manager.is_process_running.return_value = True
-        controller = PalWorldController(
-            client=mock_client, process_manager=mock_process_manager
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
         )
         calls = []
 
@@ -370,3 +380,119 @@ class TestPalWorldController:
         ):
             controller._server_detection_loop()
         assert len(calls) >= 2
+
+    def test_down_server_marks_tracked_players_offline(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        """Ghost players: a server that stops must release its tracked
+        players, otherwise they show as online forever."""
+        mock_process_manager.is_process_running.return_value = False
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
+        controller._update_server_info_with_players()
+        mock_client.get_player_names.assert_not_called()
+        mock_player_manager.update_players_from_server.assert_called_once_with([])
+
+    def test_up_server_updates_tracked_players(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        mock_process_manager.is_process_running.return_value = True
+        mock_client.get_player_names.return_value = [["P1", "p1", "u1", "10"]]
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
+        controller._update_server_info_with_players()
+        mock_player_manager.update_players_from_server.assert_called_once_with(
+            [["P1", "p1", "u1", "10"]]
+        )
+
+    def test_server_dying_mid_poll_discards_stale_roster(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        """The REST timeout (10s) outlives the stop handler's join (5s), so
+        a poll must re-check the process before applying a pre-stop roster,
+        which would otherwise resurrect ghost players after the release."""
+        mock_process_manager.is_process_running.side_effect = [True, False]
+        mock_client.get_player_names.return_value = [["P1", "p1", "u1", "10"]]
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
+        controller._update_server_info_with_players()
+        assert controller.current_server_info["running"] is False
+        assert controller.current_server_info["playerCount"] == 0
+        mock_player_manager.update_players_from_server.assert_called_once_with([])
+
+    def test_server_replaced_mid_poll_discards_stale_roster(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        """is_process_running re-acquires a replacement pid; the poll must
+        treat that as a stop too, not apply the old server's roster."""
+        pids = iter([111, 222])
+
+        def fake_running():
+            mock_process_manager.launched_pid = next(pids)
+            return True
+
+        mock_process_manager.is_process_running.side_effect = fake_running
+        mock_client.get_player_names.return_value = [["P1", "p1", "u1", "10"]]
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
+        controller._update_server_info_with_players()
+        assert controller.current_server_info["running"] is False
+        assert controller.current_server_info["playerCount"] == 0
+        mock_player_manager.update_players_from_server.assert_called_once_with([])
+
+    def test_server_stopped_releases_tracked_players(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        """Deterministic ghost-player release on the stop event, regardless
+        of poll phase."""
+        mock_process_manager.is_process_running.return_value = False
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
+        with patch.object(PalWorldController, "_start_detection_loop"):
+            controller._on_server_stopped({})
+        mock_player_manager.update_players_from_server.assert_called_once_with([])
+
+    def test_auto_stop_still_arms_when_running_with_no_players(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        """Guard m1: the not-running skip must not disable auto-stop."""
+        mock_process_manager.is_process_running.return_value = True
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
+        controller.current_server_info["running"] = True
+        controller.last_server_started_time = 0
+        with patch("threading.Thread"):
+            controller._handle_auto_stop_condition()
+        assert controller.auto_stop_delay_thread is not None
+
+    def test_auto_stop_skipped_when_server_not_running(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        mock_process_manager.is_process_running.return_value = False
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
+        controller._handle_auto_stop_condition()
+        assert controller.auto_stop_delay_thread is None
+
+    def test_adoption_announcement_keeps_poll_loop_alive(
+        self, mock_settings, mock_client, mock_process_manager, mock_player_manager
+    ):
+        """An adopted server announces SERVER_STARTED from the poll thread
+        itself, while its stop event is set. Spawning a second thread would
+        fail (one is already alive), so the loop must stay alive instead."""
+        controller = self._controller_without_loop(
+            mock_process_manager, mock_client, mock_player_manager
+        )
+        controller.update_thread = threading.current_thread()
+        controller.update_thread_stop_event.set()
+        with patch("src.palworld_control.threading.Thread") as mock_thread:
+            controller.start_server_info_update_thread()
+        assert controller.update_thread_stop_event.is_set() is False
+        mock_thread.assert_not_called()
