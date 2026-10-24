@@ -56,11 +56,9 @@ class PalWorldController:
 
         self._setup_subscriptions()
         self._detect_existing_server_process()
-
-        # If no server was found, keep looking every 5 seconds so a
-        # process that starts later is still picked up.
-        if not self.process_manager.launched_pid:
-            self._start_detection_loop()
+        # Watch the process for the whole session: pick up one that starts
+        # later, and notice when a tracked one disappears on its own.
+        self._start_detection_loop()
 
     def _create_process_manager(self):
         detected_os = platform.system()
@@ -172,15 +170,31 @@ class PalWorldController:
         self._detection_thread.start()
 
     def _server_detection_loop(self):
-        """Repeatedly check for a PalServer process until one is found."""
+        """Watch the PalServer process: emit SERVER_STARTED when one appears
+        outside our control and SERVER_STOPPED when a tracked one goes away."""
         try:
             while not self._detection_stop_event.is_set():
+                self._check_tracked_process_gone()
                 self._detect_existing_server_process()
-                if self.process_manager.launched_pid:
-                    break
                 self._detection_stop_event.wait(settings.pollingRate)
         except Exception:
             logging.exception("Server detection loop failed")
+
+    def _check_tracked_process_gone(self):
+        """Fire SERVER_STOPPED once if the tracked process exited uncleanly.
+
+        Without this, a server that dies outside the monitor (crash, closed
+        window, LGSM cron stop) is never reported stopped: the status poll
+        loop keeps hammering a dead REST API and the auto-start listener,
+        which only re-arms on SERVER_STOPPED, never comes back.
+        """
+        if not self.process_manager.launched_pid:
+            return
+        if self.process_manager.is_process_running():
+            return
+        self.process_manager.clear_pid()
+        logging.info("Tracked PalServer process is gone; emitting SERVER_STOPPED")
+        bus.publish(Event.SERVER_STOPPED, {"pid": None})
 
     def stop_server(self):
         logging.info("Palworld server stop command received")

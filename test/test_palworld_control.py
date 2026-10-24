@@ -297,3 +297,76 @@ class TestPalWorldController:
         )
         players = controller.get_players_for_web()
         assert players == mock_player_manager.get_all_players.return_value
+
+    def _controller_for_transition_tests(self, mock_process_manager, mock_client):
+        """Controller without its background loop, for deterministic tests."""
+        with patch.object(PalWorldController, "_start_detection_loop"):
+            return PalWorldController(client=mock_client, process_manager=mock_process_manager)
+
+    @patch("src.events.bus.publish")
+    def test_process_gone_emits_server_stopped(
+        self, mock_publish, mock_settings, mock_client, mock_process_manager
+    ):
+        """Regression for issue #6: a tracked process exiting outside the
+        monitor (crash, closed window) must fire SERVER_STOPPED so the status
+        poll loop halts and the auto-start listener re-arms."""
+        mock_process_manager.launched_pid = 1234
+        mock_process_manager.is_process_running.return_value = False
+        controller = self._controller_for_transition_tests(
+            mock_process_manager, mock_client
+        )
+        controller._check_tracked_process_gone()
+        mock_publish.assert_called_once_with(Event.SERVER_STOPPED, {"pid": None})
+        mock_process_manager.clear_pid.assert_called_once()
+
+    @patch("src.events.bus.publish")
+    def test_process_reacquired_emits_no_stopped_event(
+        self, mock_publish, mock_settings, mock_client, mock_process_manager
+    ):
+        mock_process_manager.launched_pid = 1234
+        mock_process_manager.is_process_running.return_value = True
+        controller = self._controller_for_transition_tests(
+            mock_process_manager, mock_client
+        )
+        controller._check_tracked_process_gone()
+        mock_publish.assert_not_called()
+        mock_process_manager.clear_pid.assert_not_called()
+
+    @patch("src.events.bus.publish")
+    def test_no_tracked_process_emits_no_stopped_event(
+        self, mock_publish, mock_settings, mock_client, mock_process_manager
+    ):
+        controller = self._controller_for_transition_tests(
+            mock_process_manager, mock_client
+        )
+        controller._check_tracked_process_gone()
+        mock_publish.assert_not_called()
+        mock_process_manager.clear_pid.assert_not_called()
+
+    def test_detection_loop_keeps_watching_after_start(
+        self, mock_settings, mock_client, mock_process_manager
+    ):
+        """The loop must not exit once a process is tracked: it is also the
+        watcher that notices the process disappearing."""
+        mock_process_manager.launched_pid = 1234
+        mock_process_manager.is_process_running.return_value = True
+        controller = PalWorldController(
+            client=mock_client, process_manager=mock_process_manager
+        )
+        calls = []
+
+        def stop_after_two_calls():
+            calls.append(1)
+            if len(calls) >= 2:
+                controller._detection_stop_event.set()
+
+        with (
+            patch.object(
+                controller,
+                "_detect_existing_server_process",
+                side_effect=stop_after_two_calls,
+            ),
+            patch.object(controller, "_check_tracked_process_gone"),
+        ):
+            controller._server_detection_loop()
+        assert len(calls) >= 2
