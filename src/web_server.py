@@ -16,6 +16,7 @@ import sys
 import socket
 import json
 import queue
+import re
 from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
 from flask_login import (
     LoginManager,
@@ -115,6 +116,8 @@ class WebServer:
         bus.subscribe(Event.SERVER_STARTED, self._on_server_started)
         bus.subscribe(Event.SERVER_STOPPED, self._on_server_stopped)
         bus.subscribe(Event.SERVER_STATUS, self._on_server_status)
+        bus.subscribe(Event.BAN_ADDED, self._on_ban_changed)
+        bus.subscribe(Event.BAN_REMOVED, self._on_ban_changed)
 
         self._sse_clients: list[queue.Queue] = []
         self._sse_lock = threading.RLock()
@@ -186,21 +189,26 @@ class WebServer:
             # Use the processed player records (PlayerManager), not the raw
             # REST tuples in `data["players"]` — the frontend expects
             # objects with .name/.level/.steam_id, not positional lists.
-            self.state_cache["players"] = list(self.palworld_controller.get_players_for_web())
-            self.state_cache["banned_players"] = list(data.get("banned_players", []))
+            self.state_cache["players"] = list(
+                self.palworld_controller.get_players_for_web()
+            )
+            self._sync_banned_players()
             players = list(self.state_cache["players"])
             total_player_count = len(
                 self.palworld_controller.player_manager.get_online_players()
             )
-        # Broadcast to SSE clients
-        payload = {
-            "data": dict(self.state_cache),
-            "players": players,
-            "banned_players": list(data.get("banned_players", [])),
-            "total_player_count": total_player_count,
-            "autoStopDelay": round(settings.autoStopDelay),
-        }
-        self._broadcast_sse(payload)
+            payload = {
+                "data": dict(self.state_cache),
+                "players": players,
+                "banned_players": list(self.state_cache["banned_players"]),
+                "total_player_count": total_player_count,
+                "autoStopDelay": round(settings.autoStopDelay),
+            }
+            self._broadcast_sse(payload)
+
+    def _on_ban_changed(self, data):
+        with self._lock:
+            self._on_server_status(dict(self.state_cache))
 
     def _register_filters(self):
         """Register custom Jinja2 filters."""
@@ -290,21 +298,21 @@ class WebServer:
     def _handle_stream(self):
         """Return a streaming response that pushes server-status events."""
         q: queue.Queue = queue.Queue(maxsize=32)
-        with self._sse_lock:
-            self._sse_clients.append(q)
+        with self._lock:
+            self._sync_banned_players()
+            snapshot = {
+                "data": dict(self.state_cache),
+                "players": list(self.state_cache["players"]),
+                "banned_players": list(self.state_cache["banned_players"]),
+                "total_player_count": self.state_cache["playerCount"],
+                "autoStopDelay": round(settings.autoStopDelay),
+            }
+            with self._sse_lock:
+                self._sse_clients.append(q)
 
         def generate():
             try:
-                # Send the current state immediately on connect
-                with self._lock:
-                    snapshot = {
-                        "data": dict(self.state_cache),
-                        "players": list(self.state_cache["players"]),
-                        "banned_players": list(self.state_cache["banned_players"]),
-                        "total_player_count": self.state_cache["playerCount"],
-                        "autoStopDelay": round(settings.autoStopDelay),
-                    }
-                    yield f"data: {json.dumps(snapshot)}\n\n"
+                yield f"data: {json.dumps(snapshot)}\n\n"
 
                 while True:
                     try:
@@ -367,7 +375,9 @@ class WebServer:
                 elif remaining <= 2:
                     warning_msg = f"{remaining} attempts remaining before lockout"
 
-                return render_template("login.html", error=error_msg, warning=warning_msg)
+                return render_template(
+                    "login.html", error=error_msg, warning=warning_msg
+                )
 
         return render_template("login.html")
 
@@ -384,6 +394,7 @@ class WebServer:
     def _json_state(self, **extra):
         """Build a JSON response dict from the current server state."""
         with self._lock:
+            self._sync_banned_players()
             return jsonify(
                 data=dict(self.state_cache),
                 players=list(self.palworld_controller.get_players_for_web()),
@@ -398,6 +409,7 @@ class WebServer:
     def _handle_index(self):
         """Handle the main page route."""
         with self._lock:
+            self._sync_banned_players()
             players = list(self.palworld_controller.get_players_for_web())
             total_player_count = len(
                 self.palworld_controller.player_manager.get_online_players()
@@ -416,6 +428,7 @@ class WebServer:
             "index.html",
             controlServerThroughWeb=settings.controlServerThroughWeb,
             showServerIPAddress=settings.showServerIPAddress,
+            autoStopEnabled=settings.autoStop,
             data=current_server_info,
             players=players,
             total_player_count=total_player_count,
@@ -440,8 +453,8 @@ class WebServer:
     def _handle_kick(self):
         """Handle player kick request."""
         steam_id = request.form.get("steam_id")
-        if not steam_id:
-            return jsonify(success=False, message="Steam ID is required"), 400
+        if not steam_id or not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", steam_id):
+            return jsonify(success=False, message="A valid Steam ID is required"), 400
         logging.info(
             f"Kicked player {steam_id} by {current_user.username} from {request.remote_addr}"
         )
@@ -454,8 +467,8 @@ class WebServer:
     def _handle_ban(self):
         """Handle player ban request."""
         steam_id = request.form.get("steam_id")
-        if not steam_id:
-            return jsonify(success=False, message="Steam ID is required"), 400
+        if not steam_id or not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", steam_id):
+            return jsonify(success=False, message="A valid Steam ID is required"), 400
         logging.info(
             f"Banned player {steam_id} by {current_user.username} from {request.remote_addr}"
         )
@@ -468,8 +481,8 @@ class WebServer:
     def _handle_unban(self):
         """Handle player unban request."""
         steam_id = request.form.get("steam_id")
-        if not steam_id:
-            return jsonify(success=False, message="Steam ID is required"), 400
+        if not steam_id or not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", steam_id):
+            return jsonify(success=False, message="A valid Steam ID is required"), 400
         logging.info(
             f"Unbanned player {steam_id} by {current_user.username} from {request.remote_addr}"
         )
@@ -482,6 +495,7 @@ class WebServer:
     def _handle_get_banned(self):
         """Handle request to get list of banned players."""
         with self._lock:
+            self._sync_banned_players()
             return jsonify(
                 success=True, banned_players=list(self.state_cache["banned_players"])
             )

@@ -91,6 +91,8 @@ function updateServerStatusUI(data, response) {
     const onBtn = document.getElementById("onBtn");
     const statusOn = document.querySelector('.status-on');
     const statusOff = document.querySelector('.status-off');
+    const autoStopNotice = document.getElementById('autoStopNotice');
+    if (autoStopNotice) autoStopNotice.style.display = data.running ? 'block' : 'none';
 
     if (data.running) {
         if (statusOn) statusOn.style.display = "inline-block";
@@ -121,7 +123,10 @@ function updatePlayerInfoUI(data, response) {
     const bannedSteamIds = new Set(bannedPlayers);
 
     // Combine online/offline players with banned players
-    let allPlayers = [...(response.players || [])];
+    let allPlayers = (response.players || []).map(player => ({
+        ...player,
+        banned: bannedSteamIds.has(player.steam_id)
+    }));
 
     // Add banned players who are not in the current player list
     bannedPlayers.forEach(steamId => {
@@ -136,12 +141,6 @@ function updatePlayerInfoUI(data, response) {
                 last_online: null,
                 banned: true
             });
-        } else {
-            // Mark existing player as banned
-            const player = allPlayers.find(p => p.steam_id === steamId);
-            if (player) {
-                player.banned = true;
-            }
         }
     });
 
@@ -176,18 +175,18 @@ function updatePlayerInfoUI(data, response) {
 
         sortedPlayers.forEach(player => {
             const isBanned = player.banned || false;
-            const statusText = player.currently_online ? 'Online' : (isBanned ? 'Banned' : formatTimestamp(player.last_online));
-            const statusClass = player.currently_online ? 'status-online' : (isBanned ? 'status-banned' : 'status-offline');
-            const rowClass = player.currently_online ? 'online' : (isBanned ? 'banned' : 'offline');
+            const statusText = isBanned ? 'Banned' : (player.currently_online ? 'Online' : formatTimestamp(player.last_online));
+            const statusClass = isBanned ? 'status-banned' : (player.currently_online ? 'status-online' : 'status-offline');
+            const rowClass = isBanned ? 'banned' : (player.currently_online ? 'online' : 'offline');
 
             // Show action buttons based on player status and ban status
             let actionButtons = '';
-            if (player.currently_online) {
-                actionButtons = `<button class="kick-btn" onclick="handleKickPlayer('${player.steam_id}', '${escapeHtml(player.name)}')">Kick</button><button class="ban-btn" onclick="handleBanPlayer('${player.steam_id}', '${escapeHtml(player.name)}')">Ban</button>`;
-            } else if (isBanned) {
-                actionButtons = `<button class="unban-btn" onclick="handleUnbanPlayer('${player.steam_id}', '${escapeHtml(player.name)}')">Unban</button>`;
+            if (isBanned) {
+                actionButtons = playerActionButton('Unban', player);
+            } else if (player.currently_online) {
+                actionButtons = playerActionButton('Kick', player) + playerActionButton('Ban', player);
             } else {
-                actionButtons = `<button class="ban-btn" onclick="handleBanPlayer('${player.steam_id}', '${escapeHtml(player.name)}')">Ban</button>`;
+                actionButtons = playerActionButton('Ban', player);
             }
 
             tableHTML += `
@@ -209,6 +208,14 @@ function updatePlayerInfoUI(data, response) {
     } else {
         playersInfoElement.textContent = "- No players found";
     }
+}
+
+function playerActionButton(action, player) {
+    const button = document.createElement('button');
+    button.className = `${action.toLowerCase()}-btn`;
+    button.textContent = action;
+    button.setAttribute('onclick', `handle${action}Player(${JSON.stringify(player.steam_id)}, ${JSON.stringify(player.name)})`);
+    return button.outerHTML;
 }
 
 function escapeHtml(text) {
@@ -327,7 +334,7 @@ async function handleKickPlayer(steamId, playerName) {
 
         const result = await response.json();
 
-        if (result.success) {
+        if (result.success === true) {
             alert(`${playerName} has been kicked from the server.`);
         } else {
             alert(`Failed to kick ${playerName}. ${result.message || ''}`);
@@ -371,7 +378,7 @@ async function handleBanPlayer(steamId, playerName) {
 
         const result = await response.json();
 
-        if (result.success) {
+        if (result.success === true) {
             alert(`${playerName} has been banned from the server.`);
         } else {
             alert(`Failed to ban ${playerName}. ${result.message || ''}`);
@@ -417,14 +424,16 @@ async function handleUnbanPlayer(steamId, playerName) {
 
         const result = await response.json();
 
-        if (result.success) {
+        if (result.success === true) {
             alert(`${playerName} has been unbanned from the server.`);
         } else {
             alert(`Failed to unban ${playerName}. ${result.message || ''}`);
         }
 
         // Update player info with new banned status
-        handleServerAction("getStatus");
+        updateServerStatusUI(result.data, result);
+        updatePlayerInfoUI(result.data, result);
+        updateLastUpdatedUI();
     } catch (error) {
         console.error('Error unbanning player:', error);
         alert('An error occurred while trying to unban the player.');

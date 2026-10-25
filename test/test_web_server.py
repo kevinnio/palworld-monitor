@@ -5,6 +5,7 @@ Extended tests for WebServer route handlers and event integration.
 from unittest.mock import MagicMock, patch
 from src.web_server import WebServer
 
+
 class TestWebServerEventHandlers:
     """Test suite for event handler methods."""
 
@@ -71,6 +72,7 @@ class TestWebServerEventHandlers:
             {"name": "P3", "steam_id": "u3", "level": "20", "currently_online": True},
         ]
         server.palworld_controller.get_players_for_web.return_value = processed_players
+        server.palworld_controller.get_banned_players.return_value = ["SteamID1"]
         server.palworld_controller.player_manager.get_online_players.return_value = (
             processed_players
         )
@@ -88,7 +90,11 @@ class TestWebServerEventHandlers:
             {
                 "running": True,
                 "playerCount": 3,
-                "players": [["P1", "p1", "u1", "10"], ["P2", "p2", "u2", "15"], ["P3", "p3", "u3", "20"]],
+                "players": [
+                    ["P1", "p1", "u1", "10"],
+                    ["P2", "p2", "u2", "15"],
+                    ["P3", "p3", "u3", "20"],
+                ],
                 "banned_players": ["SteamID1"],
             }
         )
@@ -120,7 +126,10 @@ class TestWebServerEventHandlers:
         """Test that _sync_banned_players loads existing bans."""
         server = WebServer.__new__(WebServer)
         server.palworld_controller = MagicMock()
-        server.palworld_controller.get_banned_players.return_value = ["SteamID1", "SteamID2"]
+        server.palworld_controller.get_banned_players.return_value = [
+            "SteamID1",
+            "SteamID2",
+        ]
         server.state_cache = {
             "running": False,
             "playerCount": 0,
@@ -155,5 +164,3 @@ class TestWebServerEventHandlers:
         server._sync_players()
         assert server.state_cache["players"] == known_players
         assert server.state_cache["playerCount"] == 0
-
-

@@ -118,15 +118,15 @@ class _Handler(BaseHTTPRequestHandler):
             if p:
                 with _lock:
                     _players.remove(p)
-            self._respond(200, {})
+            self._respond(200)
         elif endpoint == "ban":
             p = _find_player(userid)
             if p:
                 with _lock:
                     _players.remove(p)
-            self._respond(200, {})
+            self._respond(200)
         elif endpoint == "unban":
-            self._respond(200, {})
+            self._respond(200)
         elif endpoint == "announce":
             self._respond(200, {})
         else:

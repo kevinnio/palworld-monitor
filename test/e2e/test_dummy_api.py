@@ -56,8 +56,13 @@ def test_get_metrics(dummy_process):
     assert r.status_code == 200
     m = r.json()
     for key in (
-        "serverfps", "currentplayernum", "serverframetime",
-        "maxplayernum", "uptime", "basecampnum", "days",
+        "serverfps",
+        "currentplayernum",
+        "serverframetime",
+        "maxplayernum",
+        "uptime",
+        "basecampnum",
+        "days",
     ):
         assert key in m, f"Missing '{key}' in metrics"
 
@@ -79,8 +84,11 @@ def test_get_settings(dummy_process):
 
 def test_kick(dummy_process):
     # Kick steam_001.
-    r = requests.post(f"{BASE}/kick", json={"userid": "steam_001"}, auth=AUTH, timeout=5)
+    r = requests.post(
+        f"{BASE}/kick", json={"userid": "steam_001"}, auth=AUTH, timeout=5
+    )
     assert r.status_code == 200
+    assert r.content == b""
     # Verify removed.
     r = requests.get(f"{BASE}/players", auth=AUTH, timeout=5)
     ids = {p["playerId"] for p in r.json()["players"]}
@@ -90,18 +98,24 @@ def test_kick(dummy_process):
 def test_ban(dummy_process):
     r = requests.post(f"{BASE}/ban", json={"userid": "steam_002"}, auth=AUTH, timeout=5)
     assert r.status_code == 200
+    assert r.content == b""
     r = requests.get(f"{BASE}/players", auth=AUTH, timeout=5)
     ids = {p["playerId"] for p in r.json()["players"]}
     assert "steam_002" not in ids
 
 
 def test_unban(dummy_process):
-    r = requests.post(f"{BASE}/unban", json={"userid": "steam_003"}, auth=AUTH, timeout=5)
+    r = requests.post(
+        f"{BASE}/unban", json={"userid": "steam_003"}, auth=AUTH, timeout=5
+    )
     assert r.status_code == 200
+    assert r.content == b""
 
 
 def test_announce(dummy_process):
-    r = requests.post(f"{BASE}/announce", json={"message": "hello"}, auth=AUTH, timeout=5)
+    r = requests.post(
+        f"{BASE}/announce", json={"message": "hello"}, auth=AUTH, timeout=5
+    )
     assert r.status_code == 200
 
 

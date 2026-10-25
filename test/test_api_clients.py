@@ -44,10 +44,14 @@ class TestRestClient:
             # Test behavior: request returns the expected data
             assert result == {"success": True, "data": "test"}
 
-    def test_make_request_no_content(self, mock_settings):
-        """Test HTTP request with no content."""
+    @pytest.mark.parametrize(
+        "status_code,expected",
+        [(200, True), (204, False), (400, False), (401, False), (500, False)],
+    )
+    def test_make_request_no_content(self, mock_settings, status_code, expected):
+        """Moderation returns a boolean even when PalServer sends no body."""
         mock_response = MagicMock()
-        mock_response.status_code = 204
+        mock_response.status_code = status_code
         mock_response.content = b""
         mock_response.raise_for_status.return_value = None
 
@@ -55,7 +59,7 @@ class TestRestClient:
             client = RestClient()
             result = client._make_post_request("test")
 
-            assert result == {}
+            assert result is expected
 
     def test_make_request_connection_error(self, mock_settings):
         """Test failed HTTP request with connection error."""

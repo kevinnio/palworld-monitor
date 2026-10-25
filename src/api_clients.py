@@ -47,8 +47,6 @@ class RestClient:
             response = requests.post(
                 url, headers=self.headers, json=data, auth=self.auth, timeout=10
             )
-            if not response.content:
-                return {}
             if response.status_code == 200:
                 return True
             logging.error(f"Failed to {endpoint} (status: {response.status_code})")

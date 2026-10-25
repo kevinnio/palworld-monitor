@@ -19,6 +19,120 @@ from test.support import (
 class TestBanlistManager:
     """Test suite for BanlistManager class."""
 
+    @pytest.mark.parametrize(
+        "exe_dir", [".", "Pal/Binaries/Win64", "Pal/Binaries/Linux"]
+    )
+    @pytest.mark.parametrize("exists", [False, True])
+    def test_detects_native_banlist(self, tmp_path, mock_settings, exe_dir, exists):
+        binaries = tmp_path / "Pal/Binaries"
+        binaries.mkdir(parents=True)
+        native = tmp_path / "Pal/Saved/SaveGames/banlist.txt"
+        if exists:
+            native.parent.mkdir(parents=True)
+            native.write_text("steam_123,UID123\n")
+
+        mock_settings.palworldServerExePath = str(tmp_path / exe_dir / "PalServer.exe")
+        manager = BanlistManager()
+
+        assert manager.banlist_path == str(native)
+        assert manager.get_banned_players() == (["steam_123"] if exists else [])
+
+    def test_native_pairs_are_unique_ids(self, tmp_path):
+        path = tmp_path / "banlist.txt"
+        path.write_text("# Bans\nsteam_123,UID123\nsteam_123\n steam_456,UID456\n")
+        manager = BanlistManager(str(path))
+
+        assert manager.get_banned_players() == ["steam_123", "steam_456"]
+        assert manager.is_banned("steam_123") is True
+
+    def test_native_layout_does_not_use_stale_legacy_banlist(
+        self, tmp_path, mock_settings
+    ):
+        binaries = tmp_path / "Pal/Binaries/Win64"
+        binaries.mkdir(parents=True)
+        (binaries / "banlist.txt").write_text("steam_stale\n")
+        mock_settings.palworldServerExePath = str(binaries / "PalServer.exe")
+
+        manager = BanlistManager()
+
+        assert manager.banlist_path == str(tmp_path / "Pal/Saved/SaveGames/banlist.txt")
+
+    @pytest.mark.parametrize("steam_id", ["", "steam_123,UID", "steam_123\nsteam_456"])
+    def test_invalid_id_does_not_change_file(self, tmp_path, steam_id):
+        path = tmp_path / "banlist.txt"
+        path.write_text("steam_123,UID123\n")
+        manager = BanlistManager(str(path))
+
+        assert manager.add_ban(steam_id) is False
+        assert manager.remove_ban(steam_id) is False
+        assert path.read_text() == "steam_123,UID123\n"
+
+    def test_add_preserves_native_entries_and_comments(self, tmp_path):
+        path = tmp_path / "banlist.txt"
+        original = "# Bans\nsteam_123,UID123"
+        path.write_text(original)
+        manager = BanlistManager(str(path))
+
+        assert manager.add_ban("steam_123") is True
+        assert path.read_text() == original
+        assert manager.add_ban("steam_456") is True
+        assert path.read_text() == original + "\nsteam_456\n"
+
+    def test_remove_preserves_other_native_entries(self, tmp_path):
+        path = tmp_path / "banlist.txt"
+        path.write_text("# Bans\nsteam_123,UID123\nsteam_123\n\nsteam_456,UID456\n")
+        manager = BanlistManager(str(path))
+
+        assert manager.remove_ban("steam_123") is True
+        assert path.read_text() == "# Bans\n\nsteam_456,UID456\n"
+
+    @pytest.mark.parametrize("action", ["add_ban", "remove_ban"])
+    def test_read_failure_does_not_overwrite_bans(self, tmp_path, action):
+        path = tmp_path / "banlist.txt"
+        path.write_text("steam_123,UID123\n")
+        manager = BanlistManager(str(path))
+
+        with patch.object(
+            manager, "_read_lines", side_effect=PermissionError("read denied")
+        ):
+            assert getattr(manager, action)("steam_123") is False
+
+        assert path.read_text() == "steam_123,UID123\n"
+
+    def test_failed_replace_leaves_original_and_no_temp_file(self, tmp_path):
+        path = tmp_path / "banlist.txt"
+        path.write_text("steam_123,UID123\nsteam_456,UID456\n")
+        manager = BanlistManager(str(path))
+
+        with patch(
+            "src.banlist_manager.os.replace",
+            side_effect=PermissionError("write denied"),
+        ):
+            assert manager.remove_ban("steam_123") is False
+
+        assert path.read_text() == "steam_123,UID123\nsteam_456,UID456\n"
+        assert list(tmp_path.iterdir()) == [path]
+
+    def test_notification_does_not_hold_file_lock(self, tmp_path):
+        import threading
+        from src.events import bus, Event
+
+        manager = BanlistManager(str(tmp_path / "banlist.txt"))
+        read_done = threading.Event()
+        observed = []
+
+        def subscriber(data):
+            worker = threading.Thread(
+                target=lambda: (manager.get_banned_players(), read_done.set())
+            )
+            worker.start()
+            observed.append(read_done.wait(1))
+            worker.join(timeout=1)
+
+        bus.subscribe(Event.BAN_ADDED, subscriber)
+        assert manager.add_ban("steam_123") is True
+        assert observed == [True]
+
     @pytest.fixture
     def temp_banlist_file(self):
         """Create a temporary banlist file."""

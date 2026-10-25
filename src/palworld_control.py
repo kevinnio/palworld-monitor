@@ -246,8 +246,10 @@ class PalWorldController:
         # Server down: skip the REST call and release tracked players, who
         # would otherwise show as online forever after a stop.
         players = self.get_player_names() if running else []
-        if running and (not self.is_palworld_process_running()
-                        or self.process_manager.launched_pid != pid_at_start):
+        if running and (
+            not self.is_palworld_process_running()
+            or self.process_manager.launched_pid != pid_at_start
+        ):
             # Server died mid-poll (or was replaced by a new process): a
             # pre-stop roster landing after the stop event's release would
             # resurrect ghost players.
@@ -312,7 +314,8 @@ class PalWorldController:
         try:
             success = self.client.ban_player({"steam_id": steam_id})
             if success:
-                bus.publish(Event.CMD_BAN_PLAYER, {"steam_id": steam_id})
+                return self.banlist_manager.add_ban(steam_id)
+
             return success
         except Exception as e:
             logging.error(f"Error banning {steam_id}: {e}")
@@ -322,7 +325,8 @@ class PalWorldController:
         try:
             success = self.client.unban_player({"steam_id": steam_id})
             if success:
-                bus.publish(Event.CMD_UNBAN_PLAYER, {"steam_id": steam_id})
+                return self.banlist_manager.remove_ban(steam_id)
+
             return success
         except Exception as e:
             logging.error(f"Error unbanning {steam_id}: {e}")
@@ -360,4 +364,3 @@ class PalWorldController:
                 logging.error(f"Update loop error: {e}")
             if self.update_thread_stop_event.wait(settings.pollingRate):
                 break
-

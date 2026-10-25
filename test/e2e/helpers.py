@@ -98,7 +98,7 @@ def is_palworld_running():
 
 
 @contextmanager
-def run_monitor_app():
+def run_monitor_app(settings_path=TEST_SETTINGS):
     """Start the monitor app, yield the process, then tear it down."""
     web_port = settings.webServerPort
     base_url = f"http://localhost:{web_port}"
@@ -108,7 +108,7 @@ def run_monitor_app():
     remove_stale_pid_files()
 
     project_root = Path(__file__).resolve().parents[2]
-    env = {**os.environ, "PALWORLD_MONITOR_SETTINGS": str(TEST_SETTINGS)}
+    env = {**os.environ, "PALWORLD_MONITOR_SETTINGS": str(settings_path)}
     process = subprocess.Popen(
         [sys.executable, "-m", "src.main"],
         cwd=project_root,

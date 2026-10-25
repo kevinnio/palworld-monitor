@@ -19,6 +19,7 @@ A Python application for managing PalWorld dedicated servers on Windows and Linu
   - Track online/offline players (session-based)
   - Kick or ban players
   - Player details: name, Steam ID, level
+  - Unban players from the dashboard, including bans already stored by PalServer
 - **Security**:
   - Web interface with authentication (username/password login)
   - CSRF protection and rate limiting
@@ -135,6 +136,10 @@ above) — the process needs permission to launch and signal the game
 server. `WorkingDirectory` matters too: `app.log`, `data/players.json`,
 `banlist.txt`, the `.pid` files, and `session_secret.key` are all written
 relative to it, not to wherever the binary itself lives.
+
+The dashboard reads PalServer's `Pal/Saved/SaveGames/banlist.txt`, including
+native `steam_id,player_uid` entries. Ban and unban require the server's REST API
+to be available. Keep the banlist writable by the account running the monitor.
 
 ## Manual PalServer setup (optional)
 

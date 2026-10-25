@@ -6,6 +6,7 @@ including template rendering, session management, CSRF protection, and all API r
 Tests run in-process without needing an actual HTTP server or browser.
 """
 
+import pytest
 
 
 class TestLoginPageRendering:
@@ -31,7 +32,10 @@ class TestLoginPageRendering:
         )
 
         assert response.status_code == 200
-        assert b"Invalid credentials" in response.data or b"Too many failed attempts" in response.data
+        assert (
+            b"Invalid credentials" in response.data
+            or b"Too many failed attempts" in response.data
+        )
 
 
 class TestSuccessfulLoginFlow:
@@ -86,7 +90,10 @@ class TestFailedLoginFlow:
 
         assert response.status_code == 200
         # Should contain error message in the rendered template
-        assert b"Invalid credentials" in response.data or b"Too many failed attempts" in response.data
+        assert (
+            b"Invalid credentials" in response.data
+            or b"Too many failed attempts" in response.data
+        )
 
     def test_login_attempt_counter_increments(self, client):
         """Multiple failed login attempts increment the counter."""
@@ -147,6 +154,23 @@ class TestLogoutFlow:
 
 
 class TestIndexPageRendering:
+    @pytest.mark.parametrize(
+        "enabled,running", [(False, False), (False, True), (True, False), (True, True)]
+    )
+    def test_auto_stop_notice_matches_settings_and_state(
+        self, auth_client, web_app_factory, mock_settings, enabled, running
+    ):
+        mock_settings.autoStop = enabled
+        web_app_factory.state_cache["running"] = running
+        html = auth_client.get("/").get_data(as_text=True)
+
+        assert ('id="autoStopNotice"' in html) is enabled
+        if enabled:
+            assert (
+                "display:none;"
+                in html.split('id="autoStopNotice"', 1)[1].split(">", 1)[0]
+            ) is not running
+
     """Test suite for index/dashboard page rendering."""
 
     def test_index_page_renders_when_logged_in(self, auth_client):
@@ -186,6 +210,7 @@ class TestStatusUpdatePolling:
         assert response.status_code == 200
         # Should return JSON with expected keys
         import json
+
         data = json.loads(response.data)
         assert "data" in data or "running" in str(data).lower()
 
@@ -244,6 +269,71 @@ class TestUnbanPlayerAction:
         )
 
         assert response.status_code == 200
+
+
+class TestBanStateUpdates:
+    @pytest.mark.parametrize("endpoint", ["/kick", "/ban", "/unban"])
+    @pytest.mark.parametrize(
+        "steam_id", ["", "steam_123,UID", "steam_123\nsteam_456", "steam_'123"]
+    )
+    def test_invalid_id_is_rejected_before_api_call(
+        self, auth_client, web_app_factory, endpoint, steam_id
+    ):
+        response = auth_client.post(endpoint, data={"steam_id": steam_id})
+
+        assert response.status_code == 400
+        method = {
+            "/kick": "kick_player",
+            "/ban": "ban_player",
+            "/unban": "unban_player",
+        }[endpoint]
+        getattr(web_app_factory.palworld_controller, method).assert_not_called()
+
+    def test_ban_and_unban_update_response_and_sse_without_polling(
+        self, auth_client, web_app_factory, tmp_path
+    ):
+        import json
+        import queue
+        from src.banlist_manager import BanlistManager
+
+        server = web_app_factory
+        controller = server.palworld_controller
+        manager = BanlistManager(str(tmp_path / "banlist.txt"))
+        controller.get_banned_players.side_effect = manager.get_banned_players
+        controller.ban_player.side_effect = manager.add_ban
+        controller.unban_player.side_effect = manager.remove_ban
+        events = queue.Queue()
+        server._sse_clients.append(events)
+
+        for endpoint, expected in [("/ban", ["steam_123"]), ("/unban", [])]:
+            response = auth_client.post(endpoint, data={"steam_id": "steam_123"})
+            body = response.get_json()
+            assert body["success"] is True
+            assert body["banned_players"] == expected
+            event = json.loads(events.get_nowait().removeprefix("data: "))
+            assert event["banned_players"] == expected
+            assert auth_client.get("/banned").get_json()["banned_players"] == expected
+
+    def test_stale_poll_cannot_restore_removed_ban(self, auth_client, web_app_factory):
+        server = web_app_factory
+        server.palworld_controller.get_banned_players.return_value = []
+        server._on_server_status({"running": True, "banned_players": ["steam_old"]})
+
+        assert server.state_cache["banned_players"] == []
+        assert auth_client.get("/banned").get_json()["banned_players"] == []
+
+    def test_stream_reads_current_banlist(self, auth_client, web_app_factory):
+        import json
+
+        web_app_factory.palworld_controller.get_banned_players.return_value = [
+            "steam_123"
+        ]
+        response = auth_client.get("/stream", buffered=False)
+        try:
+            event = json.loads(next(response.response).decode().removeprefix("data: "))
+            assert event["banned_players"] == ["steam_123"]
+        finally:
+            response.close()
 
 
 class TestSessionTimeoutRedirectsToLogin:

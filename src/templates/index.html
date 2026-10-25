@@ -66,10 +66,12 @@
     <div id="playersInfo">- Loading...</div>
 
     <!-- Auto-Stop Information -->
-    <div style="margin-top: 30px;">
+    {% if autoStopEnabled %}
+    <div id="autoStopNotice" style="margin-top:30px;{% if not data.running %} display:none;{% endif %}">
         Notice: If there are no players online, the server will automatically stop after
         <span id="ServerAutoOffTime">{{ autoStopDelay }}</span> seconds.
     </div>
+    {% endif %}
 
     {% if showServerIPAddress %}
     <div style="margin-top:30px;">

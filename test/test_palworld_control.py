@@ -56,7 +56,9 @@ class TestPalWorldController:
             patch("time.time", return_value=1000),
             patch("src.palworld_control.settings") as mock_ctrl_settings,
         ):
-            mock_ctrl_settings.palworldServerExePath = mock_settings.palworldServerExePath
+            mock_ctrl_settings.palworldServerExePath = (
+                mock_settings.palworldServerExePath
+            )
             mock_ctrl_settings.palworldExeArguments = mock_settings.palworldExeArguments
 
             controller = PalWorldController(
@@ -186,10 +188,8 @@ class TestPalWorldController:
         assert result is True
         mock_publish.assert_any_call(Event.CMD_KICK_PLAYER, {"steam_id": "123"})
 
-    @patch("src.events.bus.publish")
     def test_ban_player(
         self,
-        mock_publish,
         mock_settings,
         mock_client,
         mock_process_manager,
@@ -204,12 +204,11 @@ class TestPalWorldController:
         )
         result = controller.ban_player("123")
         assert result is True
-        mock_publish.assert_any_call(Event.CMD_BAN_PLAYER, {"steam_id": "123"})
+        mock_client.ban_player.assert_called_once_with({"steam_id": "123"})
+        mock_banlist_manager.add_ban.assert_called_once_with("123")
 
-    @patch("src.events.bus.publish")
     def test_unban_player(
         self,
-        mock_publish,
         mock_settings,
         mock_client,
         mock_process_manager,
@@ -224,7 +223,32 @@ class TestPalWorldController:
         )
         result = controller.unban_player("123")
         assert result is True
-        mock_publish.assert_any_call(Event.CMD_UNBAN_PLAYER, {"steam_id": "123"})
+        mock_client.unban_player.assert_called_once_with({"steam_id": "123"})
+        mock_banlist_manager.remove_ban.assert_called_once_with("123")
+
+    @pytest.mark.parametrize(
+        "action,storage", [("ban_player", "add_ban"), ("unban_player", "remove_ban")]
+    )
+    @pytest.mark.parametrize(
+        "api_success,storage_success", [(True, False), (False, True)]
+    )
+    def test_moderation_reports_api_and_storage_failures(
+        self,
+        mock_client,
+        mock_banlist_manager,
+        action,
+        storage,
+        api_success,
+        storage_success,
+    ):
+        controller = PalWorldController.__new__(PalWorldController)
+        controller.client = mock_client
+        controller.banlist_manager = mock_banlist_manager
+        getattr(mock_client, action).return_value = api_success
+        getattr(mock_banlist_manager, storage).return_value = storage_success
+
+        assert getattr(controller, action)("steam_123") is False
+        assert getattr(mock_banlist_manager, storage).call_count == int(api_success)
 
     def test_get_server_status_is_running(
         self, mock_settings, mock_client, mock_process_manager
@@ -312,7 +336,11 @@ class TestPalWorldController:
 
     @patch("src.events.bus.publish")
     def test_process_gone_emits_server_stopped(
-        self, mock_publish, mock_settings, mock_client, mock_process_manager,
+        self,
+        mock_publish,
+        mock_settings,
+        mock_client,
+        mock_process_manager,
         mock_player_manager,
     ):
         """Regression for issue #6: a tracked process exiting outside the
@@ -329,7 +357,11 @@ class TestPalWorldController:
 
     @patch("src.events.bus.publish")
     def test_process_reacquired_emits_no_stopped_event(
-        self, mock_publish, mock_settings, mock_client, mock_process_manager,
+        self,
+        mock_publish,
+        mock_settings,
+        mock_client,
+        mock_process_manager,
         mock_player_manager,
     ):
         mock_process_manager.launched_pid = 1234
@@ -343,7 +375,11 @@ class TestPalWorldController:
 
     @patch("src.events.bus.publish")
     def test_no_tracked_process_emits_no_stopped_event(
-        self, mock_publish, mock_settings, mock_client, mock_process_manager,
+        self,
+        mock_publish,
+        mock_settings,
+        mock_client,
+        mock_process_manager,
         mock_player_manager,
     ):
         controller = self._controller_without_loop(

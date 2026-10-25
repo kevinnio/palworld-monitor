@@ -161,6 +161,7 @@ def web_app_factory():
     controller = MagicMock()
     controller.is_palworld_process_running.return_value = False
     controller.get_players_for_web.return_value = []
+    controller.get_banned_players.return_value = []
     controller.player_manager.get_online_players.return_value = []
     controller.start_server.return_value = True
     controller.stop_server.return_value = True
