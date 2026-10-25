@@ -16,6 +16,7 @@ import sys
 import socket
 import json
 import queue
+import re
 from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
 from flask_login import (
     LoginManager,
@@ -400,8 +401,8 @@ class WebServer:
     def _handle_kick(self):
         """Handle player kick request."""
         steam_id = request.form.get("steam_id")
-        if not steam_id:
-            return jsonify(success=False, message="Steam ID is required"), 400
+        if not steam_id or not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", steam_id):
+            return jsonify(success=False, message="A valid Steam ID is required"), 400
         logging.info(
             f"Kicked player {steam_id} by {current_user.username} from {request.remote_addr}"
         )
@@ -414,8 +415,8 @@ class WebServer:
     def _handle_ban(self):
         """Handle player ban request."""
         steam_id = request.form.get("steam_id")
-        if not steam_id:
-            return jsonify(success=False, message="Steam ID is required"), 400
+        if not steam_id or not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", steam_id):
+            return jsonify(success=False, message="A valid Steam ID is required"), 400
         logging.info(
             f"Banned player {steam_id} by {current_user.username} from {request.remote_addr}"
         )
@@ -428,8 +429,8 @@ class WebServer:
     def _handle_unban(self):
         """Handle player unban request."""
         steam_id = request.form.get("steam_id")
-        if not steam_id:
-            return jsonify(success=False, message="Steam ID is required"), 400
+        if not steam_id or not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", steam_id):
+            return jsonify(success=False, message="A valid Steam ID is required"), 400
         logging.info(
             f"Unbanned player {steam_id} by {current_user.username} from {request.remote_addr}"
         )
@@ -450,3 +451,4 @@ class WebServer:
             f"Web server start - listening on 0.0.0.0:{settings.webServerPort}"
         )
         self.app.run(host="0.0.0.0", port=settings.webServerPort, debug=False)
+

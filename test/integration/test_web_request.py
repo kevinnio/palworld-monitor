@@ -160,13 +160,15 @@ class TestIndexPageRendering:
         self, auth_client, web_app_factory, mock_settings, enabled, running
     ):
         mock_settings.autoStop = enabled
-        web_app_factory.state_cache["running"] = running
+        snapshot = dict(web_app_factory.palworld_controller.get_snapshot.return_value)
+        snapshot["state"] = "RUNNING" if running else "STOPPED"
+        web_app_factory.palworld_controller.get_snapshot.return_value = snapshot
         html = auth_client.get("/").get_data(as_text=True)
 
         assert ('id="autoStopNotice"' in html) is enabled
         if enabled:
             assert (
-                "display:none;"
+                "display: none;"
                 in html.split('id="autoStopNotice"', 1)[1].split(">", 1)[0]
             ) is not running
 
@@ -327,10 +329,14 @@ class TestBanStateUpdates:
 
         server = web_app_factory
         controller = server.palworld_controller
-        manager = BanlistManager(str(tmp_path / "banlist.txt"))
-        controller.get_banned_players.side_effect = manager.get_banned_players
+        manager = BanlistManager(server.bus, str(tmp_path / "banlist.txt"))
         controller.ban_player.side_effect = manager.add_ban
         controller.unban_player.side_effect = manager.remove_ban
+        snapshot = dict(controller.get_snapshot.return_value)
+        controller.get_snapshot.side_effect = lambda: {
+            **snapshot,
+            "banned_players": manager.get_banned_players(),
+        }
         events = queue.Queue()
         server._sse_clients.append(events)
 
@@ -338,29 +344,32 @@ class TestBanStateUpdates:
             response = auth_client.post(endpoint, data={"steam_id": "steam_123"})
             body = response.get_json()
             assert body["success"] is True
-            assert body["banned_players"] == expected
+            assert body["data"]["banned_players"] == expected
             event = json.loads(events.get_nowait().removeprefix("data: "))
-            assert event["banned_players"] == expected
+            assert event["data"]["banned_players"] == expected
             assert auth_client.get("/banned").get_json()["banned_players"] == expected
 
     def test_stale_poll_cannot_restore_removed_ban(self, auth_client, web_app_factory):
         server = web_app_factory
-        server.palworld_controller.get_banned_players.return_value = []
-        server._on_server_status({"running": True, "banned_players": ["steam_old"]})
+        assert server.palworld_controller.get_snapshot.return_value["banned_players"] == []
 
-        assert server.state_cache["banned_players"] == []
+        server._on_committed({"banned_players": ["steam_old"]})
+
+        assert server.snapshot["banned_players"] == []
         assert auth_client.get("/banned").get_json()["banned_players"] == []
 
     def test_stream_reads_current_banlist(self, auth_client, web_app_factory):
         import json
 
-        web_app_factory.palworld_controller.get_banned_players.return_value = [
-            "steam_123"
-        ]
+        controller = web_app_factory.palworld_controller
+        controller.get_snapshot.return_value = {
+            **controller.get_snapshot.return_value,
+            "banned_players": ["steam_123"],
+        }
         response = auth_client.get("/stream", buffered=False)
         try:
             event = json.loads(next(response.response).decode().removeprefix("data: "))
-            assert event["banned_players"] == ["steam_123"]
+            assert event["data"]["banned_players"] == ["steam_123"]
         finally:
             response.close()
 
