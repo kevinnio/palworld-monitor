@@ -7,6 +7,7 @@ Run them with: uv run poe smoke
 
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -148,7 +149,7 @@ def test_server_lifecycle(logged_in_page):
 
 
 def test_player_management(logged_in_page):
-    """Verify player list from the dummy API, then kick and ban a player."""
+    """Verify the dummy roster, then kick, ban and unban a player."""
     kill_existing_palworld()
 
     _refresh_status(logged_in_page)
@@ -173,11 +174,18 @@ def test_player_management(logged_in_page):
     # Wait for the next poll cycle to pick up the change.
     expect(logged_in_page.locator(".status-online")).to_have_count(2, timeout=30000)
 
-    # Ban TestPlayer2.
-    logged_in_page.locator("text=TestPlayer2").locator("..").locator(".ban-btn").click(
-        timeout=5000
-    )
+    # Ban TestPlayer2 and confirm the ban reaches the server's banlist.
+    player_row = logged_in_page.locator("text=TestPlayer2").locator("..")
+    player_row.locator(".ban-btn").click(timeout=5000)
     expect(logged_in_page.locator(".status-online")).to_have_count(1, timeout=30000)
+    expect(player_row.locator(".status-banned")).to_have_count(1, timeout=30000)
+    banlist = Path(__file__).resolve().parents[2] / "banlist.txt"
+    assert "steam_002" in banlist.read_text(encoding="utf-8")
+
+    # Unban TestPlayer2 and confirm the ban is removed from the banlist.
+    player_row.locator(".unban-btn").click(timeout=5000)
+    expect(player_row.locator(".status-banned")).to_have_count(0, timeout=30000)
+    assert "steam_002" not in banlist.read_text(encoding="utf-8")
 
     logged_in_page.locator("#offBtn").click(timeout=5000)
     logged_in_page.wait_for_selector(
