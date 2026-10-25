@@ -86,15 +86,12 @@ class Supervisor:
     def get_snapshot(self) -> dict:
         """One consistent view of lifecycle, roster and REST health."""
         with self._state_lock:
-            players = self.player_manager.get_all_players()
             return {
                 "revision": self._revision,
                 "state": self._state,
                 "playerData": self._player_data,
-                "playerCount": sum(
-                    1 for player in players if player.get("currently_online")
-                ),
-                "players": players,
+                "playerCount": self.player_manager.get_player_count(),
+                "players": self.player_manager.get_all_players(),
                 "banned_players": list(self.banlist_manager.get_banned_players()),
             }
 
@@ -296,45 +293,54 @@ class Supervisor:
         return self._handle_process_snapshot(observation.snapshot)
 
     def _handle_process_snapshot(self, snapshot: ProcessSnapshot) -> list:
+        with self._state_lock:
+            state = self._state
+        if state == LifecycleState.STARTING:
+            return []
+        if state == LifecycleState.STOPPED:
+            return self._handle_stopped_snapshot(snapshot)
+        return self._handle_active_snapshot(snapshot)
+
+    def _handle_stopped_snapshot(self, snapshot: ProcessSnapshot) -> list:
         replacement = None
         stale_tracking = None
         reconcile = False
         with self._state_lock:
-            state = self._state
-            current = self._identity
-            if state == LifecycleState.STARTING:
+            if self._state != LifecycleState.STOPPED:
                 return []
-            if state == LifecycleState.STOPPED:
-                if snapshot.tracked is not None:
-                    if snapshot.found is not None and snapshot.found.matches(
-                        snapshot.tracked
-                    ):
-                        # Only adopt a tracked PID when this scan actually
-                        # found it as PalServer; mere PID liveness is not proof.
-                        replacement = snapshot.tracked
-                    else:
-                        stale_tracking = snapshot.tracked
-                if replacement is None and snapshot.found is not None:
-                    replacement = snapshot.found
-                if replacement is None and not self._stopped_reconciled:
-                    reconcile = True
-            else:
-                if current is None:
-                    return []
-                if snapshot.tracked is None or not snapshot.tracked.matches(current):
-                    return []  # stale observation from an older generation
-                if snapshot.tracked_running:
-                    return []
-                if snapshot.found is not None and not snapshot.found.matches(current):
-                    replacement = snapshot.found
+            if snapshot.tracked is not None:
+                if snapshot.found is not None and snapshot.found.matches(
+                    snapshot.tracked
+                ):
+                    # Only adopt a tracked PID when this scan actually
+                    # found it as PalServer; mere PID liveness is not proof.
+                    replacement = snapshot.tracked
+                else:
+                    stale_tracking = snapshot.tracked
+            if replacement is None and snapshot.found is not None:
+                replacement = snapshot.found
+            if replacement is None and not self._stopped_reconciled:
+                reconcile = True
         if stale_tracking is not None:
             self.process_manager.clear_identity(stale_tracking)
-        if state == LifecycleState.STOPPED:
-            if replacement is not None:
-                self._adopt(replacement)
-            elif reconcile:
-                self._reconcile_stopped()
-            return []
+        if replacement is not None:
+            self._adopt(replacement)
+        elif reconcile:
+            self._reconcile_stopped()
+        return []
+
+    def _handle_active_snapshot(self, snapshot: ProcessSnapshot) -> list:
+        replacement = None
+        with self._state_lock:
+            current = self._identity
+            if current is None:
+                return []
+            if snapshot.tracked is None or not snapshot.tracked.matches(current):
+                return []  # stale observation from an older generation
+            if snapshot.tracked_running:
+                return []
+            if snapshot.found is not None and not snapshot.found.matches(current):
+                replacement = snapshot.found
         self._commit_down()
         if replacement is not None:
             self._adopt(replacement)
@@ -378,24 +384,7 @@ class Supervisor:
                     stop_now = True
                 elif decision == auto_stop.AutoStopDecision.REVALIDATE:
                     self._poll_due_at = self._clock()
-            banned_players = list(self.banlist_manager.get_banned_players())
-            players_snapshot = self.player_manager.get_all_players()
-            player_count = sum(
-                1 for player in players_snapshot if player.get("currently_online")
-            )
-            player_data = self._player_data
-            revision = self._bump_revision_locked()
-        self.bus.publish(
-            Event.SERVER_STATUS,
-            {
-                "revision": revision,
-                "state": LifecycleState.RUNNING,
-                "playerData": player_data,
-                "playerCount": player_count,
-                "banned_players": banned_players,
-                "generation": generation,
-            },
-        )
+        self._publish_status(LifecycleState.RUNNING, generation)
         if stop_now:
             return self._begin_stop()
         return []
@@ -417,6 +406,19 @@ class Supervisor:
             {"state": state, "generation": generation, "revision": revision},
         )
 
+    def _publish_status(self, state: str, generation: int):
+        with self._state_lock:
+            revision = self._bump_revision_locked()
+            payload = {
+                "revision": revision,
+                "state": state,
+                "playerData": self._player_data,
+                "playerCount": self.player_manager.get_player_count(),
+                "banned_players": list(self.banlist_manager.get_banned_players()),
+                "generation": generation,
+            }
+        self.bus.publish(Event.SERVER_STATUS, payload)
+
     def _reconcile_stopped(self):
         """Make the persisted roster consistent with a stopped server."""
         with self._state_lock:
@@ -424,25 +426,8 @@ class Supervisor:
                 return
             self.player_manager.mark_all_offline()
             self._stopped_reconciled = True
-            revision = self._bump_revision_locked()
             generation = self._generation
-            players = self.player_manager.get_all_players()
-            player_count = sum(
-                1 for player in players if player.get("currently_online")
-            )
-            player_data = self._player_data
-            banned_players = list(self.banlist_manager.get_banned_players())
-        self.bus.publish(
-            Event.SERVER_STATUS,
-            {
-                "revision": revision,
-                "state": LifecycleState.STOPPED,
-                "playerData": player_data,
-                "playerCount": player_count,
-                "banned_players": banned_players,
-                "generation": generation,
-            },
-        )
+        self._publish_status(LifecycleState.STOPPED, generation)
 
     def _commit_started(self, identity: ProcessIdentity):
         with self._state_lock:

@@ -13,6 +13,7 @@
 
 """Auto-start manager: listens for Palworld client packets and launches the server."""
 
+import contextlib
 import socket
 from src.events import EventBus, Event
 from src.settings import settings
@@ -62,20 +63,13 @@ class AutoStartManager:
             self.bus.unsubscribe(Event.LIFECYCLE_CHANGED, self._on_lifecycle_changed)
             self._subscribed = False
 
-    def is_port_available(self, port):
-        """Check if PalWorld server port is available."""
-        try:
-            test_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-            except OSError:
-                pass
-            test_socket.bind((settings.palworldServerHost, port))
-            test_socket.close()
-            return True
-        except OSError:
-            return False
+    @staticmethod
+    def _new_udp_socket():
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        with contextlib.suppress(OSError, AttributeError):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        return sock
 
     def open_palworld_port_socket(self):
         """Open socket before listen. Thread-safe."""
@@ -85,12 +79,7 @@ class AutoStartManager:
 
         for attempt in range(max_retries):
             try:
-                new_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                new_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                try:
-                    new_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-                except (OSError, AttributeError):
-                    pass
+                new_sock = self._new_udp_socket()
                 new_sock.bind(("0.0.0.0", palworld_server_port))
                 # Closing a UDP socket need not wake recvfrom on every OS.
                 new_sock.settimeout(0.2)
@@ -131,19 +120,6 @@ class AutoStartManager:
             logging.error(f"Error closing PalWorld port socket: {e}")
             logging.error(traceback.format_exc())
             return False
-        return True
-
-    def wait_for_port_available(self, port, timeout=30):
-        """Wait up to `timeout` seconds for the port to become available. Returns True if available, False if timeout."""
-        start_time = time.time()
-        logging.info(f"Waiting for Palworld port {port} to become available...")
-        while not self.is_port_available(port):
-            if time.time() - start_time > timeout:
-                logging.error(
-                    f"Palworld port {port} is still in use after waiting {timeout} seconds. Aborting listen."
-                )
-                return False
-            time.sleep(1)
         return True
 
     def wait_for_player_connection(self):

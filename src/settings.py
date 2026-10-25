@@ -24,6 +24,16 @@ PALWORLD_EXE_ARGUMENTS = (
     "-NumberOfWorkerThreadsServer=16 -restapi"
 )
 
+DEFAULT_SECURITY_SETTINGS = {
+    "sessionSecretKey": None,
+    "sessionTimeout": 3600,
+    "maxLoginAttempts": 5,
+    "lockoutDuration": 300,
+    "rateLimitEnabled": True,
+    "rateLimitRequests": 100,
+    "rateLimitWindow": 60,
+}
+
 
 class Settings:
     def __init__(self):
@@ -47,13 +57,7 @@ class Settings:
             "pollingRate": 5,
             "webUsername": "admin",
             "webPassword": None,
-            "sessionSecretKey": None,
-            "sessionTimeout": 3600,
-            "maxLoginAttempts": 5,
-            "lockoutDuration": 300,
-            "rateLimitEnabled": True,
-            "rateLimitRequests": 100,
-            "rateLimitWindow": 60,
+            **DEFAULT_SECURITY_SETTINGS,
         }
         for key, value in self.settings.items():
             setattr(self, key, value)
@@ -74,7 +78,7 @@ class Settings:
                     saved = f.read().strip()
                 if saved and len(saved) == 64:
                     self.settings["sessionSecretKey"] = saved
-                    setattr(self, "sessionSecretKey", saved)
+                    self.sessionSecretKey = saved
                     return
         except OSError:
             pass
@@ -83,7 +87,7 @@ class Settings:
             return
 
         self.settings["sessionSecretKey"] = secrets.token_hex(32)
-        setattr(self, "sessionSecretKey", self.settings["sessionSecretKey"])
+        self.sessionSecretKey = self.settings["sessionSecretKey"]
         try:
             with open(key_file, "w") as f:
                 f.write(self.settings["sessionSecretKey"])

@@ -68,9 +68,6 @@ class PalWorldController:
     def get_banned_players(self):
         return self.banlist_manager.get_banned_players()
 
-    def is_player_banned(self, steam_id):
-        return self.banlist_manager.is_banned(steam_id)
-
     def kick_player(self, steam_id):
         try:
             return self.client.kick_player({"steam_id": steam_id})
@@ -79,23 +76,21 @@ class PalWorldController:
             return False
 
     def ban_player(self, steam_id):
-        try:
-            success = self.client.ban_player({"steam_id": steam_id})
-            if success:
-                return self.banlist_manager.add_ban(steam_id)
-
-            return success
-        except Exception as e:
-            logging.error(f"Error banning {steam_id}: {e}")
-            return False
+        return self._update_ban(
+            steam_id, self.client.ban_player, self.banlist_manager.add_ban
+        )
 
     def unban_player(self, steam_id):
-        try:
-            success = self.client.unban_player({"steam_id": steam_id})
-            if success:
-                return self.banlist_manager.remove_ban(steam_id)
+        return self._update_ban(
+            steam_id, self.client.unban_player, self.banlist_manager.remove_ban
+        )
 
-            return success
+    def _update_ban(self, steam_id, remote_action, local_action):
+        try:
+            if remote_action({"steam_id": steam_id}):
+                return local_action(steam_id)
+
+            return False
         except Exception as e:
-            logging.error(f"Error unbanning {steam_id}: {e}")
+            logging.error(f"Error updating ban for {steam_id}: {e}")
             return False

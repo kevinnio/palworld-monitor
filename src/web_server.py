@@ -11,6 +11,7 @@
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
 
+import contextlib
 import os
 import sys
 import socket
@@ -150,13 +151,16 @@ class WebServer:
         snapshot["banned_players"] = list(snapshot.get("banned_players", []))
         return snapshot
 
+    def _cache_snapshot(self, snapshot: dict) -> dict:
+        """Keep the newest snapshot; equal revisions refresh ban data."""
+        if snapshot["revision"] >= self.snapshot.get("revision", 0):
+            self.snapshot = snapshot
+        return snapshot
+
     def _refresh_snapshot(self) -> dict:
         """Take one consistent snapshot and cache it for this notification."""
         with self._lock:
-            snapshot = self._read_snapshot()
-            if snapshot["revision"] >= self.snapshot.get("revision", 0):
-                self.snapshot = snapshot
-            return snapshot
+            return self._cache_snapshot(self._read_snapshot())
 
     def _on_committed(self, data=None):
         # Serialize refresh+broadcast so concurrent notifications and ban
@@ -246,9 +250,13 @@ class WebServer:
     # SSE helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _sse_message(payload) -> str:
+        return f"data: {json.dumps(payload)}\n\n"
+
     def _broadcast_sse(self, payload):
         """Push *payload* to every connected SSE client."""
-        text = f"data: {json.dumps(payload)}\n\n"
+        text = self._sse_message(payload)
         with self._sse_lock:
             dead = []
             for q in self._sse_clients:
@@ -265,16 +273,14 @@ class WebServer:
         with self._lock:
             # Capture the initial snapshot before the queue can receive events,
             # all under the same lock as refresh/broadcast.
-            snapshot = self._read_snapshot()
-            if snapshot["revision"] >= self.snapshot.get("revision", 0):
-                self.snapshot = snapshot
+            snapshot = self._cache_snapshot(self._read_snapshot())
             with self._sse_lock:
                 self._sse_clients.append(q)
             initial_payload = self._payload(snapshot)
 
         def generate():
             try:
-                yield f"data: {json.dumps(initial_payload)}\n\n"
+                yield self._sse_message(initial_payload)
 
                 while True:
                     try:
@@ -284,11 +290,8 @@ class WebServer:
                         # Send a keepalive comment so the connection isn't dropped
                         yield ": keepalive\n\n"
             finally:
-                with self._sse_lock:
-                    try:
-                        self._sse_clients.remove(q)
-                    except ValueError:
-                        pass
+                with self._sse_lock, contextlib.suppress(ValueError):
+                    self._sse_clients.remove(q)
 
         return Response(generate(), mimetype="text/event-stream")
 
@@ -398,46 +401,44 @@ class WebServer:
             self.palworld_controller.stop_server()
         return self._json_state()
 
-    def _handle_kick(self):
-        """Handle player kick request."""
+    def _handle_player_action(self, log_verb, success_message, fail_message, action):
         steam_id = request.form.get("steam_id")
         if not steam_id or not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", steam_id):
             return jsonify(success=False, message="A valid Steam ID is required"), 400
         logging.info(
-            f"Kicked player {steam_id} by {current_user.username} from {request.remote_addr}"
+            f"{log_verb} player {steam_id} by {current_user.username} from {request.remote_addr}"
         )
-        success = self.palworld_controller.kick_player(steam_id)
+        success = action(steam_id)
         return self._json_state(
             success=success,
-            message=f"Player {'kicked successfully' if success else 'kick failed'}",
+            message=success_message if success else fail_message,
+        )
+
+    def _handle_kick(self):
+        """Handle player kick request."""
+        return self._handle_player_action(
+            "Kicked",
+            "Player kicked successfully",
+            "Player kick failed",
+            self.palworld_controller.kick_player,
         )
 
     def _handle_ban(self):
         """Handle player ban request."""
-        steam_id = request.form.get("steam_id")
-        if not steam_id or not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", steam_id):
-            return jsonify(success=False, message="A valid Steam ID is required"), 400
-        logging.info(
-            f"Banned player {steam_id} by {current_user.username} from {request.remote_addr}"
-        )
-        success = self.palworld_controller.ban_player(steam_id)
-        return self._json_state(
-            success=success,
-            message=f"Player {'banned successfully' if success else 'ban failed'}",
+        return self._handle_player_action(
+            "Banned",
+            "Player banned successfully",
+            "Player ban failed",
+            self.palworld_controller.ban_player,
         )
 
     def _handle_unban(self):
         """Handle player unban request."""
-        steam_id = request.form.get("steam_id")
-        if not steam_id or not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", steam_id):
-            return jsonify(success=False, message="A valid Steam ID is required"), 400
-        logging.info(
-            f"Unbanned player {steam_id} by {current_user.username} from {request.remote_addr}"
-        )
-        success = self.palworld_controller.unban_player(steam_id)
-        return self._json_state(
-            success=success,
-            message=f"Player {'unbanned successfully' if success else 'unban failed'}",
+        return self._handle_player_action(
+            "Unbanned",
+            "Player unbanned successfully",
+            "Player unban failed",
+            self.palworld_controller.unban_player,
         )
 
     def _handle_get_banned(self):

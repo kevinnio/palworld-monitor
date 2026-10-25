@@ -7,6 +7,8 @@ import socket
 
 import yaml
 
+from src.settings import DEFAULT_SECURITY_SETTINGS
+
 
 def auto_detect_palserver():
     """Try to find PalServer.exe in common locations. Returns path or None."""
@@ -180,15 +182,7 @@ def _default_config(exe_path, admin_pass, web_pass, use_lgsm=False):
         "autoStop": {
             "stopDelay": 600,
         },
-        "security": {
-            "sessionSecretKey": None,
-            "sessionTimeout": 3600,
-            "maxLoginAttempts": 5,
-            "lockoutDuration": 300,
-            "rateLimitEnabled": True,
-            "rateLimitRequests": 100,
-            "rateLimitWindow": 60,
-        },
+        "security": dict(DEFAULT_SECURITY_SETTINGS),
     }
 
 

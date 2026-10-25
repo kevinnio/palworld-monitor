@@ -11,6 +11,7 @@
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
 
+import contextlib
 import logging
 import os
 import platform
@@ -64,11 +65,8 @@ class OSProcessManager:
         self._identity = self._identity_for_pid(pid)
 
     def _remove_pid_file(self):
-        if os.path.exists(self.pid_file_name()):
-            try:
-                os.remove(self.pid_file_name())
-            except Exception:
-                pass
+        with contextlib.suppress(Exception):
+            os.remove(self.pid_file_name())
 
     def set_known_identity(self, identity: ProcessIdentity):
         """Record the process we own before any SERVER_STARTED is committed."""
@@ -167,6 +165,19 @@ class OSProcessManager:
             found=self.find_process_identity("PalServer"),
         )
 
+    def _spawn(self, exe_path, exe_args, **popen_kwargs) -> ProcessIdentity:
+        process = subprocess.Popen(
+            [exe_path] + exe_args.split(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            **popen_kwargs,
+        )
+        identity = self._identity_for_pid(process.pid)
+        self.set_known_identity(identity)
+        return identity
+
     def launch_process(self, _exe_path, _exe_args) -> Optional[ProcessIdentity]:
         raise NotImplementedError
 
@@ -223,12 +234,9 @@ class WindowsProcessManager(OSProcessManager):
         return "palworld_server.win.pid"
 
     def launch_process(self, exe_path, exe_args) -> Optional[ProcessIdentity]:
-        process = subprocess.Popen(
-            [exe_path] + exe_args.split(),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
+        return self._spawn(
+            exe_path,
+            exe_args,
             creationflags=(
                 subprocess.HIGH_PRIORITY_CLASS
                 | subprocess.DETACHED_PROCESS
@@ -236,9 +244,6 @@ class WindowsProcessManager(OSProcessManager):
                 | subprocess.CREATE_NO_WINDOW
             ),
         )
-        identity = self._identity_for_pid(process.pid)
-        self.set_known_identity(identity)
-        return identity
 
 
 class LinuxProcessManager(OSProcessManager):
@@ -246,17 +251,7 @@ class LinuxProcessManager(OSProcessManager):
         return "palworld_server.linux.pid"
 
     def launch_process(self, exe_path, exe_args) -> Optional[ProcessIdentity]:
-        process = subprocess.Popen(
-            [exe_path] + exe_args.split(),
-            start_new_session=True,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-        )
-        identity = self._identity_for_pid(process.pid)
-        self.set_known_identity(identity)
-        return identity
+        return self._spawn(exe_path, exe_args, start_new_session=True)
 
 
 class LGSMProcessManager(OSProcessManager):
