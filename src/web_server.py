@@ -451,4 +451,3 @@ class WebServer:
             f"Web server start - listening on 0.0.0.0:{settings.webServerPort}"
         )
         self.app.run(host="0.0.0.0", port=settings.webServerPort, debug=False)
-

@@ -182,26 +182,24 @@ class AutoStartManager:
         return data.startswith(b"\x09\x08\x00")
 
     def listen_palworld_access_core(self):
-        """Listen from PalWorld server port."""
+        """Listen from PalWorld server port once."""
         if self.controller is None or self.controller.state != LifecycleState.STOPPED:
             return
 
-        for _attempt in range(3):
-            if self.is_aborting:
-                return
+        if self.is_aborting:
+            return
 
-            if not self.open_palworld_port_socket():
-                return
+        if not self.open_palworld_port_socket():
+            return
 
-            if not self.wait_for_player_connection():
-                self.close_palworld_port_socket()
-                return
-
-            # The server is about to start; release the port and let the
-            # supervisor's committed state re-arm listening if the launch fails.
+        if not self.wait_for_player_connection():
             self.close_palworld_port_socket()
-            if self.controller.start_server():
-                return
+            return
+
+        # The server is about to start; release the port and let the
+        # supervisor's committed state re-arm listening if the launch fails.
+        self.close_palworld_port_socket()
+        self.controller.start_server()
 
     def listen_palworld_access(self, data=None):
         """Start listening for PalWorld access."""

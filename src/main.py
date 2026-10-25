@@ -34,7 +34,8 @@ def _determine_settings_path(args):
 def main():
     args = parse_args()
 
-    print(r"""
+    print(
+        r"""
  ____   _    _ __        _____  ____  _     ____
 |  _ \ / \  | |\ \      / / _ \|  _ \| |   |  _ \
 | |_) / _ \ | | \ \ /\ / / | | | |_) | |   | | | |
@@ -46,7 +47,9 @@ def main():
 | |\/| | | | |  \| || |  | || | | | |_) |
 | |  | | |_| | |\  || |  | || |_| |  _ <
 |_|  |_|\___/|_| \_|___| |_| \___/|_| \_\
-""", flush=True)
+""",
+        flush=True,
+    )
 
     log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
@@ -70,7 +73,9 @@ def main():
             interactive_setup(settings_path, detected, use_lgsm=bool(args.useLGSM))
         except EOFError:
             print("error: no terminal available for interactive setup.")
-            print(f"copy src/settings.yaml.example -> {settings_path} and edit it, then restart.")
+            print(
+                f"copy src/settings.yaml.example -> {settings_path} and edit it, then restart."
+            )
             sys.exit(1)
 
     logging.info(f"Loading settings from {settings_path}")
@@ -97,9 +102,10 @@ def main():
         sys.exit(1)
 
     bus = EventBus()
+    process_manager = create_process_manager()
     palworld_controller = PalWorldController(
         client=client,
-        process_manager=create_process_manager(),
+        process_manager=process_manager,
         player_manager=PlayerManager(bus=bus),
         banlist_manager=BanlistManager(bus=bus),
         bus=bus,
@@ -109,7 +115,10 @@ def main():
     auto_start_manager = None
     if settings.autoStart:
         auto_start_manager = AutoStartManager(palworld_controller, bus=bus)
-        auto_start_manager.listen_palworld_access()
+        # The supervisor reports STOPPED until its first scan; never bind the
+        # game port while an undiscovered server may already hold it.
+        if process_manager.find_process_identity("PalServer") is None:
+            auto_start_manager.listen_palworld_access()
 
     web_server = None
     try:

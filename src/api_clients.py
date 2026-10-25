@@ -28,7 +28,9 @@ class RestClient:
     def _make_get_request(self, endpoint):
         try:
             url = f"{self.base_url}/{endpoint}"
-            response = requests.get(url, headers=self.headers, auth=self.auth, timeout=10)
+            response = requests.get(
+                url, headers=self.headers, auth=self.auth, timeout=10
+            )
             response.raise_for_status()
             return response.json() if response.content else {}
         except requests.exceptions.RequestException as e:

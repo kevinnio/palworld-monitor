@@ -477,9 +477,7 @@ async function handleUnbanPlayer(steamId, playerName) {
         }
 
         // Update player info with new banned status
-        updateServerStatusUI(result.data, result);
-        updatePlayerInfoUI(result.data, result);
-        updateLastUpdatedUI();
+        applySnapshot(result.data);
     } catch (error) {
         console.error('Error unbanning player:', error);
         alert('An error occurred while trying to unban the player.');

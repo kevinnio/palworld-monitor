@@ -202,4 +202,3 @@ class BanlistManager:
 
         self.bus.publish(Event.BAN_REMOVED, {"steam_id": steam_id})
         return True
-

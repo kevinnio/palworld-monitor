@@ -270,7 +270,7 @@ class TestAutoStartSocketHandling:
                 manager.listen_palworld_access_core()
                 assert controller.start_server.called
 
-    def test_listen_palworld_access_core_rebinds_when_start_is_rejected(
+    def test_listen_palworld_access_core_single_attempt_when_start_is_rejected(
         self, mock_settings
     ):
         controller = MagicMock()
@@ -287,8 +287,30 @@ class TestAutoStartSocketHandling:
         ):
             manager.listen_palworld_access_core()
 
-        assert controller.start_server.call_count == 3
-        assert open_mock.call_count == 3
+        assert controller.start_server.call_count == 1
+        assert open_mock.call_count == 1
+
+    def test_server_stopped_rearms_listening(self, mock_settings):
+        bus = EventBus()
+        controller = MagicMock()
+        controller.state = LifecycleState.STOPPED
+        controller.start_server.return_value = False
+        manager = AutoStartManager(controller, bus)
+
+        with (
+            patch.object(
+                manager, "open_palworld_port_socket", return_value=True
+            ) as open_mock,
+            patch.object(manager, "close_palworld_port_socket"),
+            patch.object(manager, "wait_for_player_connection", return_value=True),
+        ):
+            manager.listen_palworld_access_core()
+            assert open_mock.call_count == 1
+
+            bus.publish(Event.SERVER_STOPPED, {})
+            manager.listen_thread.join(timeout=2)
+
+        assert open_mock.call_count == 2
 
     def test_listen_palworld_access_core_success(self, mock_settings):
         """Test listen_palworld_access_core successful flow."""

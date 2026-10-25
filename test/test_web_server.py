@@ -194,9 +194,7 @@ class TestWebServerCommittedSnapshots:
         assert server.snapshot["state"] == "RUNNING"
 
     def test_equal_revision_ban_refresh_is_applied(self, mock_settings):
-        server, controller, bus = make_server(
-            mock_settings, make_snapshot(revision=3)
-        )
+        server, controller, bus = make_server(mock_settings, make_snapshot(revision=3))
         sse_queue = queue.Queue()
         server._sse_clients.append(sse_queue)
         controller.get_snapshot.return_value = make_snapshot(
@@ -225,9 +223,7 @@ class TestWebServerCommittedSnapshots:
 
         revisions = []
         for _ in range(3):
-            payload = json.loads(
-                next(response.response).removeprefix("data: ").strip()
-            )
+            payload = json.loads(next(response.response).removeprefix("data: ").strip())
             revisions.append(payload["data"]["revision"])
         response.response.close()
 

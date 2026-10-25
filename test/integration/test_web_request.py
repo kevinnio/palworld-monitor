@@ -8,6 +8,7 @@ Tests run in-process without needing an actual HTTP server or browser.
 
 import pytest
 
+
 class TestLoginPageRendering:
     """Test suite for login page rendering."""
 
@@ -351,7 +352,9 @@ class TestBanStateUpdates:
 
     def test_stale_poll_cannot_restore_removed_ban(self, auth_client, web_app_factory):
         server = web_app_factory
-        assert server.palworld_controller.get_snapshot.return_value["banned_players"] == []
+        assert (
+            server.palworld_controller.get_snapshot.return_value["banned_players"] == []
+        )
 
         server._on_committed({"banned_players": ["steam_old"]})
 
