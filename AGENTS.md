@@ -2,7 +2,7 @@
 
 A Python app that manages a PalWorld dedicated server on its host: auto-starts it when a player tries to connect, auto-stops it when the server is empty, tracks players and bans, and exposes a web dashboard for control.
 
-Explore the project before making changes. Uses `uv` for dependencies and commands; see [README.md](README.md) for user-facing setup, usage, and the full command-line flag reference.
+Explore the project before making changes. Uses `uv` for dependencies and commands — always `uv run` for Python commands; see [README.md](README.md) for user-facing setup, usage, and the full command-line flag reference.
 
 ## Commands
 
@@ -28,11 +28,16 @@ Explore the project before making changes. Uses `uv` for dependencies and comman
 
 - Unit tests in `test/`, fixtures in `test/conftest.py`.
 - E2E tests (`test/e2e/`) use a dummy PalServer (`test/e2e/dummy/PalServer-Dummy.py`) — no real server needed, but they are destructive: they kill any PalServer process and free ports 8211–8213. Do not run them on a machine running a real PalServer.
+- Manual QA scenarios and live-server rules live in `.agents/skills/palworld-qa/`.
 
 ## Constraints
 
 - Must run on the same host as the Palworld server (needs process spawn/kill access).
 - Only `pytest` for CI. No linter/typecheck step.
+
+## Commits
+
+- Titles short and to the point; descriptions high-level, in natural language.
 
 ## References
 

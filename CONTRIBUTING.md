@@ -74,3 +74,25 @@ Palworld server and are run in CI.
   contract.
 - `test_web_ui`: log in, start/stop the server, and manage players through the
   browser.
+
+## Release QA
+
+Before preparing a release, run `uv run poe test`, `uv run poe smoke`, and
+`uv run poe build-exe`. Smoke tests must use the dummy server, with no real
+PalServer or unrelated service on ports 8211–8213.
+
+Check the dashboard manually: login/logout, start/stop/restart, UDP auto-start,
+empty-server auto-stop, kick, ban, and unban. Verify ban changes in two open
+dashboards, after reload, and after restarting the monitor. A ban must offer
+Unban even while the last player poll still says the player is online.
+
+Check native `steam_id,player_uid` entries, preservation of unrelated entries,
+cancelled actions, unavailable REST, and an unwritable disposable banlist.
+Failures must not show success or erase existing bans.
+
+Finally, use the built Windows executable against a real local PalServer with
+auto-stop disabled. Use an agreed test ID, confirm Ban and Unban reach the REST
+API and update its native banlist, then remove the test ban and verify all
+pre-existing entries remain unchanged. Do not run smoke tests during this check.
+Keep run logs and credentials in a temporary directory. Publishing still requires
+separate approval after QA passes.
