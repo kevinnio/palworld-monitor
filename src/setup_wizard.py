@@ -7,6 +7,8 @@ import socket
 
 import yaml
 
+from src.settings import DEFAULT_SECURITY_SETTINGS
+
 
 def auto_detect_palserver():
     """Try to find PalServer.exe in common locations. Returns path or None."""
@@ -180,15 +182,7 @@ def _default_config(exe_path, admin_pass, web_pass, use_lgsm=False):
         "autoStop": {
             "stopDelay": 600,
         },
-        "security": {
-            "sessionSecretKey": None,
-            "sessionTimeout": 3600,
-            "maxLoginAttempts": 5,
-            "lockoutDuration": 300,
-            "rateLimitEnabled": True,
-            "rateLimitRequests": 100,
-            "rateLimitWindow": 60,
-        },
+        "security": dict(DEFAULT_SECURITY_SETTINGS),
     }
 
 
@@ -263,9 +257,11 @@ def print_web_link(port):
     """Print localhost and LAN links to the web admin UI."""
     print(f"\n  > Web admin UI: http://localhost:{port}")
     try:
-        lan_ip = socket.gethostbyname(socket.gethostname())
-        if lan_ip not in ("127.0.0.1", "0.0.0.0"):
-            print(f"  > LAN:          http://{lan_ip}:{port}")
-    except Exception:
-        pass
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("8.8.8.8", 80))
+            lan_ip = probe.getsockname()[0]
+    except OSError:
+        lan_ip = None
+    if lan_ip and lan_ip not in ("127.0.0.1", "0.0.0.0"):
+        print(f"  > LAN:          http://{lan_ip}:{port}")
     print()

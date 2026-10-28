@@ -2,7 +2,6 @@
 # Copyright (c) 2026 Kevin Perez - Modified work
 
 import logging
-import traceback
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -28,15 +27,16 @@ class RestClient:
     def _make_get_request(self, endpoint):
         try:
             url = f"{self.base_url}/{endpoint}"
-            response = requests.get(url, headers=self.headers, auth=self.auth, timeout=10)
+            response = requests.get(
+                url, headers=self.headers, auth=self.auth, timeout=10
+            )
             response.raise_for_status()
             return response.json() if response.content else {}
         except requests.exceptions.RequestException as e:
             logging.error(f"Error making GET request to {endpoint}: {e}")
             return None
-        except Exception as e:
-            logging.error(f"Unexpected error in GET request to {endpoint}: {e}")
-            logging.error(traceback.format_exc())
+        except Exception:
+            logging.exception(f"Unexpected error in GET request to {endpoint}")
             return None
 
     def _make_post_request(self, endpoint, data=None):
@@ -54,36 +54,28 @@ class RestClient:
         except requests.exceptions.RequestException as e:
             logging.error(f"Error making POST request to {endpoint}: {e}")
             return False
-        except Exception as e:
-            logging.error(f"Unexpected error in POST request to {endpoint}: {e}")
-            logging.error(traceback.format_exc())
+        except Exception:
+            logging.exception(f"Unexpected error in POST request to {endpoint}")
             return False
 
     def get_player_count(self):
-        try:
-            players_data = self._make_get_request("players")
-            if not players_data:
-                return 0
-            players = players_data.get("players", []) if isinstance(players_data, dict) else []
-            return len(players)
-        except Exception as e:
-            logging.error(f"Error getting player count: {e}")
-            return 0
+        players = self.get_player_names()
+        return len(players) if players is not None else None
 
     def get_player_names(self):
         try:
             players_data = self._make_get_request("players")
-            if not players_data:
-                return []
+            if players_data is None:
+                return None
             if isinstance(players_data, dict):
                 players_data = players_data.get("players", [])
             if not isinstance(players_data, list):
-                return []
+                return None
             keys = ("name", "playerId", "userId", "level")
             return [[str(p.get(k, "Unknown")) for k in keys] for p in players_data]
         except Exception as e:
             logging.error(f"Error getting player names: {e}")
-            return []
+            return None
 
     def kick_player(self, player):
         return self._make_post_request("kick", {"userid": _extract_steam_id(player)})

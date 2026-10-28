@@ -82,6 +82,19 @@ def remove_stale_pid_files():
             pass
 
 
+def remove_stale_test_bans():
+    """Drop dummy-server bans left by a previous run, keeping real ones."""
+    path = Path(__file__).resolve().parents[2] / "banlist.txt"
+    if not path.exists():
+        return
+    dummy_ids = {"steam_001", "steam_002", "steam_003"}
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    path.write_text(
+        "".join(line for line in lines if line.split(",", 1)[0].strip() not in dummy_ids),
+        encoding="utf-8",
+    )
+
+
 def is_palworld_running():
     """Check if any Palworld server process is running."""
     for proc in psutil.process_iter(["name", "cmdline"]):
@@ -106,6 +119,7 @@ def run_monitor_app(settings_path=TEST_SETTINGS):
         raise RuntimeError(f"Could not free web port {web_port} for the test app")
     kill_existing_palworld()
     remove_stale_pid_files()
+    remove_stale_test_bans()
 
     project_root = Path(__file__).resolve().parents[2]
     env = {**os.environ, "PALWORLD_MONITOR_SETTINGS": str(settings_path)}

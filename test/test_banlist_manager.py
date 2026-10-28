@@ -10,6 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.banlist_manager import BanlistManager
+from src.events import EventBus
 from test.support import (
     create_temp_file_with_content,
     cleanup_temp_file,
@@ -32,7 +33,7 @@ class TestBanlistManager:
             native.write_text("steam_123,UID123\n")
 
         mock_settings.palworldServerExePath = str(tmp_path / exe_dir / "PalServer.exe")
-        manager = BanlistManager()
+        manager = BanlistManager(EventBus())
 
         assert manager.banlist_path == str(native)
         assert manager.get_banned_players() == (["steam_123"] if exists else [])
@@ -40,7 +41,7 @@ class TestBanlistManager:
     def test_native_pairs_are_unique_ids(self, tmp_path):
         path = tmp_path / "banlist.txt"
         path.write_text("# Bans\nsteam_123,UID123\nsteam_123\n steam_456,UID456\n")
-        manager = BanlistManager(str(path))
+        manager = BanlistManager(EventBus(), str(path))
 
         assert manager.get_banned_players() == ["steam_123", "steam_456"]
         assert manager.is_banned("steam_123") is True
@@ -53,7 +54,7 @@ class TestBanlistManager:
         (binaries / "banlist.txt").write_text("steam_stale\n")
         mock_settings.palworldServerExePath = str(binaries / "PalServer.exe")
 
-        manager = BanlistManager()
+        manager = BanlistManager(EventBus())
 
         assert manager.banlist_path == str(tmp_path / "Pal/Saved/SaveGames/banlist.txt")
 
@@ -61,7 +62,7 @@ class TestBanlistManager:
     def test_invalid_id_does_not_change_file(self, tmp_path, steam_id):
         path = tmp_path / "banlist.txt"
         path.write_text("steam_123,UID123\n")
-        manager = BanlistManager(str(path))
+        manager = BanlistManager(EventBus(), str(path))
 
         assert manager.add_ban(steam_id) is False
         assert manager.remove_ban(steam_id) is False
@@ -71,7 +72,7 @@ class TestBanlistManager:
         path = tmp_path / "banlist.txt"
         original = "# Bans\nsteam_123,UID123"
         path.write_text(original)
-        manager = BanlistManager(str(path))
+        manager = BanlistManager(EventBus(), str(path))
 
         assert manager.add_ban("steam_123") is True
         assert path.read_text() == original
@@ -81,7 +82,7 @@ class TestBanlistManager:
     def test_remove_preserves_other_native_entries(self, tmp_path):
         path = tmp_path / "banlist.txt"
         path.write_text("# Bans\nsteam_123,UID123\nsteam_123\n\nsteam_456,UID456\n")
-        manager = BanlistManager(str(path))
+        manager = BanlistManager(EventBus(), str(path))
 
         assert manager.remove_ban("steam_123") is True
         assert path.read_text() == "# Bans\n\nsteam_456,UID456\n"
@@ -90,7 +91,7 @@ class TestBanlistManager:
     def test_read_failure_does_not_overwrite_bans(self, tmp_path, action):
         path = tmp_path / "banlist.txt"
         path.write_text("steam_123,UID123\n")
-        manager = BanlistManager(str(path))
+        manager = BanlistManager(EventBus(), str(path))
 
         with patch.object(
             manager, "_read_lines", side_effect=PermissionError("read denied")
@@ -102,7 +103,7 @@ class TestBanlistManager:
     def test_failed_replace_leaves_original_and_no_temp_file(self, tmp_path):
         path = tmp_path / "banlist.txt"
         path.write_text("steam_123,UID123\nsteam_456,UID456\n")
-        manager = BanlistManager(str(path))
+        manager = BanlistManager(EventBus(), str(path))
 
         with patch(
             "src.banlist_manager.os.replace",
@@ -115,9 +116,10 @@ class TestBanlistManager:
 
     def test_notification_does_not_hold_file_lock(self, tmp_path):
         import threading
-        from src.events import bus, Event
+        from src.events import Event
 
-        manager = BanlistManager(str(tmp_path / "banlist.txt"))
+        bus = EventBus()
+        manager = BanlistManager(bus, str(tmp_path / "banlist.txt"))
         read_done = threading.Event()
         observed = []
 
@@ -145,11 +147,11 @@ class TestBanlistManager:
     @pytest.fixture
     def banlist_manager(self, temp_banlist_file):
         """Create a BanlistManager instance with temporary banlist file."""
-        return BanlistManager(banlist_path=temp_banlist_file)
+        return BanlistManager(bus=EventBus(), banlist_path=temp_banlist_file)
 
     def test_initialization_with_path(self, temp_banlist_file):
         """Test initialization with explicit banlist path."""
-        manager = BanlistManager(banlist_path=temp_banlist_file)
+        manager = BanlistManager(bus=EventBus(), banlist_path=temp_banlist_file)
         assert manager.banlist_path == temp_banlist_file
 
     def test_initialization_without_path(self, temp_dir):
@@ -159,7 +161,7 @@ class TestBanlistManager:
 
         with patch("src.banlist_manager.settings") as mock_settings:
             mock_settings.palworldServerExePath = temp_server_exe
-            manager = BanlistManager()
+            manager = BanlistManager(bus=EventBus())
             # Test behavior: manager can read banlist (even if empty)
             banned_ids = manager.get_banned_players()
             assert isinstance(banned_ids, list)
@@ -180,7 +182,7 @@ class TestBanlistManager:
         temp_file_path = create_temp_file_with_content("", suffix=".txt")
 
         try:
-            manager = BanlistManager(banlist_path=temp_file_path)
+            manager = BanlistManager(bus=EventBus(), banlist_path=temp_file_path)
             banned_ids = manager.get_banned_players()
             assert banned_ids == []
         finally:
@@ -188,7 +190,9 @@ class TestBanlistManager:
 
     def test_get_banned_players_nonexistent_file(self):
         """Test reading from nonexistent banlist file."""
-        manager = BanlistManager(banlist_path="/nonexistent/path/banlist.txt")
+        manager = BanlistManager(
+            bus=EventBus(), banlist_path="/nonexistent/path/banlist.txt"
+        )
         banned_ids = manager.get_banned_players()
         assert banned_ids == []
 
@@ -245,7 +249,7 @@ class TestBanlistManager:
         )
 
         try:
-            manager = BanlistManager(banlist_path=temp_file_path)
+            manager = BanlistManager(bus=EventBus(), banlist_path=temp_file_path)
             banned_ids = manager.get_banned_players()
             assert "SteamID1" in banned_ids
             assert "SteamID2" in banned_ids
@@ -262,7 +266,7 @@ class TestBanlistManager:
         )
 
         try:
-            manager = BanlistManager(banlist_path=temp_file_path)
+            manager = BanlistManager(bus=EventBus(), banlist_path=temp_file_path)
             banned_ids = manager.get_banned_players()
             assert len(banned_ids) == 3
             assert "" not in banned_ids
@@ -276,7 +280,7 @@ class TestBanlistManager:
         temp_file = tempfile.mktemp(suffix=".txt")
 
         try:
-            manager = BanlistManager(banlist_path=temp_file)
+            manager = BanlistManager(bus=EventBus(), banlist_path=temp_file)
             result = manager.add_ban("SteamID1")
 
             assert result is True
@@ -293,7 +297,7 @@ class TestBanlistManager:
         )
 
         try:
-            manager = BanlistManager(banlist_path=temp_file_path)
+            manager = BanlistManager(bus=EventBus(), banlist_path=temp_file_path)
             banned_ids = manager.get_banned_players()
             assert len(banned_ids) == 2
             assert "SteamID1" in banned_ids

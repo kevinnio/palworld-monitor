@@ -14,6 +14,7 @@ from .temp_file_helpers import (
 )
 from .path_helpers import create_mock_path_join
 from .process_launcher import get_python_executable
+from .waiting import wait_until
 
 __all__ = [
     "create_mock_http_response",
@@ -24,4 +25,5 @@ __all__ = [
     "cleanup_temp_file",
     "create_mock_path_join",
     "get_python_executable",
+    "wait_until",
 ]

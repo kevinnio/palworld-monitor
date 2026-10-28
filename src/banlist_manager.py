@@ -2,23 +2,24 @@ from typing import List
 import os
 import logging
 import threading
-import traceback
 import tempfile
 from src.settings import settings
-from src.events import bus, Event
+from src.events import EventBus, Event
 
 
 class BanlistManager:
     """Manages the Palworld server banlist.txt file."""
 
-    def __init__(self, banlist_path=None):
+    def __init__(self, bus: EventBus, banlist_path=None):
         """Initialize the banlist manager.
 
         Args:
+            bus: Notification bus for BAN_ADDED/BAN_REMOVED.
             banlist_path: Optional path to banlist.txt. If None, will try to auto-detect.
         """
         self.banlist_path = banlist_path or self._detect_banlist_path()
         self._lock = threading.RLock()
+        self.bus = bus
 
     def _detect_banlist_path(self):
         """Detect the banlist.txt file path based on server executable path.
@@ -55,9 +56,8 @@ class BanlistManager:
             default_path = possible_paths[0]
             logging.debug(f"Using default banlist path: {default_path}")
             return default_path
-        except Exception as e:
-            logging.error(f"Error detecting banlist path: {e}")
-            logging.error(traceback.format_exc())
+        except Exception:
+            logging.exception("Error detecting banlist path")
             return None
 
     def _read_lines(self):
@@ -96,9 +96,8 @@ class BanlistManager:
                     f"Loaded {len(banned_steam_ids)} banned players from {self.banlist_path}"
                 )
                 return banned_steam_ids
-            except Exception as e:
-                logging.error(f"Error reading banlist from {self.banlist_path}: {e}")
-                logging.error(traceback.format_exc())
+            except Exception:
+                logging.exception(f"Error reading banlist from {self.banlist_path}")
                 return []
 
     def is_banned(self, steam_id: str) -> bool:
@@ -145,12 +144,11 @@ class BanlistManager:
 
                         f.write(f"{steam_id}\n")
                     logging.info(f"Successfully added ban for Steam ID: {steam_id}")
-            except Exception as e:
-                logging.error(f"Error adding ban for Steam ID {steam_id}: {e}")
-                logging.error(traceback.format_exc())
+            except Exception:
+                logging.exception(f"Error adding ban for Steam ID {steam_id}")
                 return False
 
-        bus.publish(Event.BAN_ADDED, {"steam_id": steam_id})
+        self.bus.publish(Event.BAN_ADDED, {"steam_id": steam_id})
         return True
 
     def remove_ban(self, steam_id: str) -> bool:
@@ -190,13 +188,12 @@ class BanlistManager:
                     os.replace(temp_path, self.banlist_path)
                     temp_path = None
                     logging.info(f"Successfully removed ban for Steam ID: {steam_id}")
-            except Exception as e:
-                logging.error(f"Error removing ban for Steam ID {steam_id}: {e}")
-                logging.error(traceback.format_exc())
+            except Exception:
+                logging.exception(f"Error removing ban for Steam ID {steam_id}")
                 return False
             finally:
                 if temp_path is not None:
                     os.unlink(temp_path)
 
-        bus.publish(Event.BAN_REMOVED, {"steam_id": steam_id})
+        self.bus.publish(Event.BAN_REMOVED, {"steam_id": steam_id})
         return True

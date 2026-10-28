@@ -124,7 +124,7 @@ class TestRestClient:
             client = RestClient()
             count = client.get_player_count()
 
-            assert count == 0
+            assert count is None
 
     def test_get_player_names(self, mock_settings, mock_http_response):
         """Test getting player names."""
@@ -138,6 +138,33 @@ class TestRestClient:
 
             assert len(players) == 1
             assert players[0] == ["P1", "p1", "u1", "5"]
+
+    def test_get_player_names_empty_success_is_an_empty_roster(
+        self, mock_settings, mock_http_response
+    ):
+        mock_http_response.content = json.dumps({"players": []}).encode()
+        mock_http_response.json.return_value = {"players": []}
+
+        with patch("requests.get", return_value=mock_http_response):
+            assert RestClient().get_player_names() == []
+
+    def test_get_player_names_failure_is_unavailable(self, mock_settings):
+        """A failed REST call must not look like a successful empty roster."""
+        with patch(
+            "requests.get",
+            side_effect=requests.exceptions.ConnectionError("Connection failed"),
+        ):
+            assert RestClient().get_player_names() is None
+
+    def test_get_player_names_http_error_is_unavailable(
+        self, mock_settings, mock_http_response
+    ):
+        mock_http_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            "Server error"
+        )
+
+        with patch("requests.get", return_value=mock_http_response):
+            assert RestClient().get_player_names() is None
 
     @pytest.mark.parametrize(
         "status_code,expected_result",

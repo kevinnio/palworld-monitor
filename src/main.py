@@ -4,10 +4,13 @@
 import logging
 import os
 import sys
-import traceback
 
 from src.cli import parse_args, apply_overrides
+from src.banlist_manager import BanlistManager
+from src.events import EventBus
 from src.palworld_control import PalWorldController
+from src.player_manager import PlayerManager
+from src.process_manager import create_process_manager
 from src.settings import settings
 from src.setup_wizard import (
     auto_detect_palserver,
@@ -30,7 +33,8 @@ def _determine_settings_path(args):
 def main():
     args = parse_args()
 
-    print(r"""
+    print(
+        r"""
  ____   _    _ __        _____  ____  _     ____
 |  _ \ / \  | |\ \      / / _ \|  _ \| |   |  _ \
 | |_) / _ \ | | \ \ /\ / / | | | |_) | |   | | | |
@@ -42,7 +46,9 @@ def main():
 | |\/| | | | |  \| || |  | || | | | |_) |
 | |  | | |_| | |\  || |  | || |_| |  _ <
 |_|  |_|\___/|_| \_|___| |_| \___/|_| \_\
-""", flush=True)
+""",
+        flush=True,
+    )
 
     log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
@@ -66,7 +72,9 @@ def main():
             interactive_setup(settings_path, detected, use_lgsm=bool(args.useLGSM))
         except EOFError:
             print("error: no terminal available for interactive setup.")
-            print(f"copy src/settings.yaml.example -> {settings_path} and edit it, then restart.")
+            print(
+                f"copy src/settings.yaml.example -> {settings_path} and edit it, then restart."
+            )
             sys.exit(1)
 
     logging.info(f"Loading settings from {settings_path}")
@@ -86,33 +94,48 @@ def main():
     # Client selection
     if settings.protocol.upper() == "REST":
         from src.api_clients import RestClient
+
         client = RestClient()
     else:
         logging.error(f"Invalid protocol specified in settings: {settings.protocol}")
         sys.exit(1)
 
-    palworld_controller = PalWorldController(client)
+    bus = EventBus()
+    process_manager = create_process_manager()
+    palworld_controller = PalWorldController(
+        client=client,
+        process_manager=process_manager,
+        player_manager=PlayerManager(bus=bus),
+        banlist_manager=BanlistManager(bus=bus),
+        bus=bus,
+    )
+    palworld_controller.start()
 
-    # Start background update thread if server is running
-    server_running = palworld_controller.is_palworld_process_running()
-    if server_running:
-        palworld_controller.start_server_info_update_thread()
-
+    auto_start_manager = None
     if settings.autoStart:
-        auto_start_manager = AutoStartManager(palworld_controller)
-        if not server_running:
+        auto_start_manager = AutoStartManager(palworld_controller, bus=bus)
+        # The supervisor reports STOPPED until its first scan; never bind the
+        # game port while an undiscovered server may already hold it.
+        if process_manager.find_process_identity("PalServer") is None:
             auto_start_manager.listen_palworld_access()
 
-    if settings.useWebServer:
-        print_web_link(settings.webServerPort)
-        web_server = WebServer(palworld_controller)
-        web_server.run()
+    web_server = None
+    try:
+        if settings.useWebServer:
+            print_web_link(settings.webServerPort)
+            web_server = WebServer(palworld_controller, bus=bus)
+            web_server.run()
+    finally:
+        if web_server is not None:
+            web_server.close()
+        if auto_start_manager is not None:
+            auto_start_manager.close()
+        palworld_controller.close()
 
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
-        logging.error(f"Error from src.main routine: {e}")
-        logging.error(traceback.format_exc())
+    except Exception:
+        logging.exception("Error from src.main routine")
         sys.exit(1)

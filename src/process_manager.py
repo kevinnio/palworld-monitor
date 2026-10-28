@@ -11,37 +11,80 @@
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
 
-import subprocess
-import psutil
+import contextlib
+import logging
 import os
+import platform
+import subprocess
 import threading
 import time
-import logging
-from src.events import bus, Event
+from typing import Optional
+
+import psutil
+
+from src.lifecycle.messages import ProcessIdentity, ProcessSnapshot
 from src.settings import settings
+
+
+def _terminate_and_wait(processes, timeout) -> list:
+    """SIGTERM, then SIGKILL stragglers. Returns the processes still alive."""
+    for process in processes:
+        with contextlib.suppress(psutil.NoSuchProcess):
+            process.terminate()
+    _gone, alive = psutil.wait_procs(processes, timeout=timeout)
+    for process in alive:
+        with contextlib.suppress(psutil.NoSuchProcess):
+            process.kill()
+    _gone, alive = psutil.wait_procs(alive, timeout=10)
+    return alive
+
+
+def _matches_target(info, target) -> bool:
+    """True when a process info dict is the exe, process name or script we want."""
+    if target in (info.get("exe") or "").lower():
+        return True
+
+    pname = (info.get("name") or "").lower()
+    if target in pname:
+        return True
+
+    cmdline = info.get("cmdline") or []
+    if "python" not in pname or len(cmdline) < 2:
+        return False
+
+    script = cmdline[-1]
+    # Skip -c scripts (contain newlines)
+    return "\n" not in script and target in os.path.basename(script).lower()
 
 
 class OSProcessManager:
     def __init__(self):
         self._lock = threading.Lock()
-        self.launched_pid = None
-        self._load_pid_from_file()
-        bus.subscribe(
-            Event.CMD_START_SERVER,
-            lambda data: self.launch_process(data["exe_path"], data["exe_args"]),
-        )
-        bus.subscribe(Event.CMD_STOP_SERVER, lambda data: self.terminate_process())
+        self._identity: Optional[ProcessIdentity] = None
+        self._load_identity_from_file()
 
     def pid_file_name(self):
         raise NotImplementedError
 
-    def _after_launch(self, process):
-        self._after_launch_pid(process.pid)
-
-    def _after_launch_pid(self, pid):
+    @property
+    def tracked_identity(self) -> Optional[ProcessIdentity]:
         with self._lock:
-            self.launched_pid = pid
-            self._save_pid_to_file(pid)
+            return self._identity
+
+    def _identity_for_pid(self, pid) -> ProcessIdentity:
+        pid = int(pid)
+        try:
+            return ProcessIdentity(pid, psutil.Process(pid).create_time())
+        except Exception:
+            return ProcessIdentity(pid, None)
+
+    @staticmethod
+    def _identity_of(process) -> ProcessIdentity:
+        """Identity of a live process, with create time left unknown if unreadable."""
+        try:
+            return ProcessIdentity(process.pid, process.create_time())
+        except psutil.Error:
+            return ProcessIdentity(process.pid, None)
 
     def _save_pid_to_file(self, pid):
         try:
@@ -50,130 +93,95 @@ class OSProcessManager:
         except Exception:
             pass
 
-    def _load_pid_from_file(self):
-        if os.path.exists(self.pid_file_name()):
-            try:
-                with open(self.pid_file_name(), "r") as f:
-                    pid = int(f.read().strip())
-                    self.launched_pid = pid
-            except Exception:
-                self.launched_pid = None
+    def _load_identity_from_file(self):
+        if not os.path.exists(self.pid_file_name()):
+            return
+        try:
+            with open(self.pid_file_name(), "r") as f:
+                pid = int(f.read().strip())
+        except Exception:
+            return
+        self._identity = self._identity_for_pid(pid)
 
     def _remove_pid_file(self):
-        if os.path.exists(self.pid_file_name()):
-            try:
-                os.remove(self.pid_file_name())
-            except Exception:
-                pass
+        with contextlib.suppress(Exception):
+            os.remove(self.pid_file_name())
 
-    def set_known_pid(self, pid):
+    def set_known_identity(self, identity: ProcessIdentity):
+        """Record the process we own before any SERVER_STARTED is committed."""
         with self._lock:
-            try:
-                self.launched_pid = int(pid)
-                self._save_pid_to_file(self.launched_pid)
-            except Exception:
-                self.launched_pid = None
+            self._identity = identity
+            self._save_pid_to_file(identity.pid)
 
-    def clear_pid(self):
-        """Forget the tracked process (it exited outside our control)."""
+    def clear_identity(self, expected: Optional[ProcessIdentity]) -> bool:
+        """Compare-and-clear: never forget a replacement process."""
         with self._lock:
-            self.launched_pid = None
+            current = self._identity
+            if current is None or expected is None or not current.matches(expected):
+                return False
+            self._identity = None
             self._remove_pid_file()
+            return True
 
-    def launch_process(self, _exe_path, _exe_args):
-        raise NotImplementedError
-
-    def is_process_running(self):
-        with self._lock:
-            pid = self.launched_pid
-        if pid is None:
+    def identity_is_running(self, identity: Optional[ProcessIdentity]) -> bool:
+        if identity is None:
             return False
         try:
-            process = psutil.Process(pid)
-            if process.is_running():
-                return True
-            children = process.children(recursive=True)
-            if len(children) > 0:
-                return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+            process = psutil.Process(identity.pid)
+        except psutil.NoSuchProcess:
+            return False
+        except psutil.AccessDenied:
+            return psutil.pid_exists(identity.pid)
         except Exception:
             return False
 
-        # The pid we launched is gone. The server may have been restarted
-        # outside of our control (e.g. a Steam/LGSM update cron restarting
-        # it) with a new pid -- try to re-acquire it before reporting the
-        # server as offline, since REST-based player tracking would keep
-        # working fine the whole time and make "offline" look wrong.
-        new_pid = self.find_process_pid("PalServer")
-        if new_pid:
-            logging.info(
-                f"Tracked PID {pid} is gone; re-acquired PalServer as PID "
-                f"{new_pid} (likely restarted outside palworld-monitor)."
-            )
-            self.set_known_pid(new_pid)
-            # Announce the adoption like a launch: without it nothing starts
-            # status polling for the replacement, so the app would sit at
-            # "offline" until that server stops too.
-            bus.publish(Event.SERVER_STARTED, {"pid": new_pid})
-            return True
-        return False
-
-    def terminate_process(self):
-        with self._lock:
-            if self.launched_pid is None:
+        try:
+            # An unreadable create time counts as a match, as it always has.
+            if identity.create_time is not None and not identity.matches(
+                self._identity_of(process)
+            ):
                 return False
-            try:
-                process = psutil.Process(self.launched_pid)
-                children = process.children(recursive=True)
-                for child in children:
-                    child.terminate()
-                process.terminate()
-                try:
-                    process.wait(timeout=30)
-                except psutil.TimeoutExpired:
-                    process.kill()
-                    try:
-                        process.wait(timeout=10)
-                    except psutil.TimeoutExpired:
-                        # ponytail: process is unkillable, don't lie —
-                        # return False so callers know it's still alive.
-                        return False
-                self._remove_pid_file()
-                terminated_pid = self.launched_pid
-                self.launched_pid = None
-                bus.publish(Event.SERVER_STOPPED, {"pid": terminated_pid})
+
+            if process.status() == psutil.STATUS_ZOMBIE:
+                return False
+
+            if process.is_running():
                 return True
-            except psutil.NoSuchProcess:
-                self._remove_pid_file()
-                self.launched_pid = None
-                return False
-            except psutil.AccessDenied:
-                return False
-            except Exception:
-                return False
+            return len(process.children(recursive=True)) > 0
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return False
+        except psutil.AccessDenied:
+            return True
+        except Exception:
+            return False
 
-    def find_process_pid(self, name):
+    def find_process_identity(self, name) -> Optional[ProcessIdentity]:
+        """Return the first matching process, preferring the tracked instance.
+
+        With two PalServers on one host the scan order is arbitrary, so keep
+        managing the one we already own instead of switching to a stranger.
+        """
+        tracked = self.tracked_identity
+        first = None
         try:
             target = (name or "").lower()
             if not target:
                 return None
-            for proc in psutil.process_iter(attrs=["pid", "name", "exe", "cmdline"]):
+            for proc in psutil.process_iter(
+                attrs=["pid", "name", "exe", "cmdline", "create_time", "status"]
+            ):
                 try:
                     info = proc.info
-                    exe = (info.get("exe") or "").lower()
-                    pname = (info.get("name") or "").lower()
-                    cmdline = info.get("cmdline") or []
-                    if target in exe or target in pname:
-                        return info["pid"]
-                    # Check script basename for Python processes running a .py file
-                    if "python" not in pname:
+                    if info.get("status") == psutil.STATUS_ZOMBIE:
                         continue
-                    if cmdline and len(cmdline) > 1:
-                        script = cmdline[-1]
-                        # Skip -c scripts (contain newlines)
-                        if "\n" not in script and target in os.path.basename(script).lower():
-                            return info["pid"]
+                    if not _matches_target(info, target):
+                        continue
+
+                    candidate = ProcessIdentity(info["pid"], info.get("create_time"))
+                    if tracked is not None and candidate.matches(tracked):
+                        return candidate
+                    if first is None:
+                        first = candidate
                 except (
                     psutil.NoSuchProcess,
                     psutil.AccessDenied,
@@ -182,19 +190,86 @@ class OSProcessManager:
                     continue
         except Exception:
             pass
-        return None
+        return first
 
-class WindowsProcessManager(OSProcessManager):
-    def pid_file_name(self):
-        return "palworld_server.win.pid"
+    def observe(self) -> ProcessSnapshot:
+        """I/O-only observation for the lifecycle supervisor."""
+        tracked = self.tracked_identity
+        return ProcessSnapshot(
+            tracked=tracked,
+            tracked_running=self.identity_is_running(tracked),
+            found=self.find_process_identity("PalServer"),
+        )
 
-    def launch_process(self, exe_path, exe_args):
+    def _spawn(self, exe_path, exe_args, **popen_kwargs) -> ProcessIdentity:
         process = subprocess.Popen(
             [exe_path] + exe_args.split(),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
+            **popen_kwargs,
+        )
+        identity = self._identity_for_pid(process.pid)
+        self.set_known_identity(identity)
+        return identity
+
+    def launch_process(self, _exe_path, _exe_args) -> Optional[ProcessIdentity]:
+        raise NotImplementedError
+
+    def terminate_process(
+        self, expected: Optional[ProcessIdentity] = None
+    ) -> Optional[bool]:
+        """Terminate the tracked process, or confirm it is already gone.
+
+        Returns True when the expected process is gone, False when it is still
+        running after a failed attempt, and None while shutdown is pending.
+        The runtime's process detection observes pending shutdowns. A stop only
+        succeeds once the process and its children are gone.
+        """
+        with self._lock:
+            current = self._identity
+        if current is None:
+            return False
+        if expected is not None and not current.matches(expected):
+            return False
+
+        try:
+            process = psutil.Process(current.pid)
+            if not current.matches(self._identity_of(process)):
+                # The PID now belongs to a replacement; leave it alone.
+                return False
+            children = process.children(recursive=True)
+        except psutil.NoSuchProcess:
+            self.clear_identity(current)
+            return True
+        except psutil.AccessDenied:
+            return False
+        except Exception:
+            return False
+
+        # A child may exit before the signal reaches it; only the parent's own
+        # exit proves the server stopped.
+        for child in children:
+            with contextlib.suppress(psutil.NoSuchProcess):
+                child.terminate()
+        if _terminate_and_wait([process], timeout=30):
+            return False
+        # Children that outlive the parent keep the game ports open.
+        if _terminate_and_wait(children, timeout=10):
+            return False
+        self.clear_identity(current)
+        return True
+
+
+class WindowsProcessManager(OSProcessManager):
+    def pid_file_name(self):
+        return "palworld_server.win.pid"
+
+    def launch_process(self, exe_path, exe_args) -> Optional[ProcessIdentity]:
+        return self._spawn(
+            exe_path,
+            exe_args,
             creationflags=(
                 subprocess.HIGH_PRIORITY_CLASS
                 | subprocess.DETACHED_PROCESS
@@ -202,25 +277,14 @@ class WindowsProcessManager(OSProcessManager):
                 | subprocess.CREATE_NO_WINDOW
             ),
         )
-        self._after_launch(process)
-        bus.publish(Event.SERVER_STARTED, {"pid": self.launched_pid})
 
 
 class LinuxProcessManager(OSProcessManager):
     def pid_file_name(self):
         return "palworld_server.linux.pid"
 
-    def launch_process(self, exe_path, exe_args):
-        process = subprocess.Popen(
-            [exe_path] + exe_args.split(),
-            start_new_session=True,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-        )
-        self._after_launch(process)
-        bus.publish(Event.SERVER_STARTED, {"pid": self.launched_pid})
+    def launch_process(self, exe_path, exe_args) -> Optional[ProcessIdentity]:
+        return self._spawn(exe_path, exe_args, start_new_session=True)
 
 
 class LGSMProcessManager(OSProcessManager):
@@ -237,9 +301,6 @@ class LGSMProcessManager(OSProcessManager):
 
     STARTUP_TIMEOUT = 30
     STARTUP_POLL_INTERVAL = 1
-    SHUTDOWN_VERIFY_TIMEOUT = 30
-    SHUTDOWN_VERIFY_POLL_INTERVAL = 1
-    SHUTDOWN_WATCHDOG_POLL_INTERVAL = 3
     LGSM_COMMAND_TIMEOUT = 120
 
     def __init__(self):
@@ -270,35 +331,39 @@ class LGSMProcessManager(OSProcessManager):
             logging.error(f"Error running LGSM '{command}' command on {exe_path}: {e}")
             return False
 
-    def launch_process(self, exe_path, _exe_args):
+    def launch_process(self, exe_path, _exe_args) -> Optional[ProcessIdentity]:
         self._exe_path = exe_path
         if not self._run_lgsm_command(exe_path, "start"):
-            return
+            return None
 
-        deadline = time.time() + self.STARTUP_TIMEOUT
-        pid = None
-        while time.time() < deadline:
-            pid = self.find_process_pid("PalServer")
-            if pid:
+        deadline = time.monotonic() + self.STARTUP_TIMEOUT
+        identity = None
+        while time.monotonic() < deadline:
+            identity = self.find_process_identity("PalServer")
+            if identity:
                 break
             time.sleep(self.STARTUP_POLL_INTERVAL)
 
-        if not pid:
+        if not identity:
             logging.error(
                 "LGSM 'start' completed but no PalServer process was found "
                 f"within {self.STARTUP_TIMEOUT}s. Check the LGSM script's own logs."
             )
-            return
+            return None
 
-        self._after_launch_pid(pid)
-        bus.publish(Event.SERVER_STARTED, {"pid": self.launched_pid})
+        self.set_known_identity(identity)
+        return identity
 
-    def terminate_process(self):
+    def terminate_process(
+        self, expected: Optional[ProcessIdentity] = None
+    ) -> Optional[bool]:
         with self._lock:
-            if self.launched_pid is None:
-                return False
-            pid = self.launched_pid
+            current = self._identity
             exe_path = self._exe_path or settings.palworldServerExePath
+        if current is None:
+            return False
+        if expected is not None and not current.matches(expected):
+            return False
 
         if not exe_path:
             logging.error("Cannot stop LGSM server: no LGSM script path is known.")
@@ -309,45 +374,23 @@ class LGSMProcessManager(OSProcessManager):
         # genuinely shutting down (Palworld's save-on-shutdown can run long).
         command_ok = self._run_lgsm_command(exe_path, "stop")
 
-        if self._wait_for_pid_gone(
-            pid, self.SHUTDOWN_VERIFY_TIMEOUT, self.SHUTDOWN_VERIFY_POLL_INTERVAL
-        ):
-            self._finish_termination(pid)
+        if not self.identity_is_running(current):
+            self.clear_identity(current)
             return True
 
-        # Don't give up here: if we did, no SERVER_STOPPED event ever fires,
-        # which permanently breaks the auto-start listener (it only re-arms
-        # on that event) even after the server actually finishes stopping.
-        # Keep watching in the background for as long as it takes.
+        # Keep tracking for the runtime's existing detection worker.
         logging.warning(
-            f"LGSM 'stop' hasn't confirmed PID {pid} is gone after "
-            f"{self.SHUTDOWN_VERIFY_TIMEOUT}s (command "
+            f"LGSM 'stop' hasn't confirmed PID {current.pid} is gone (command "
             f"{'completed' if command_ok else 'failed/timed out'}); "
-            "continuing to watch for it in the background."
+            "waiting for process detection to confirm the exit."
         )
-        threading.Thread(
-            target=self._watch_for_termination, args=(pid,), daemon=True
-        ).start()
-        return False
+        return None
 
-    def _wait_for_pid_gone(self, pid, timeout, interval):
-        deadline = time.time() + timeout
-        while psutil.pid_exists(pid):
-            if time.time() >= deadline:
-                return False
-            time.sleep(interval)
-        return True
 
-    def _watch_for_termination(self, pid):
-        while psutil.pid_exists(pid):
-            time.sleep(self.SHUTDOWN_WATCHDOG_POLL_INTERVAL)
-        logging.info(f"LGSM background watchdog confirmed PID {pid} has exited.")
-        self._finish_termination(pid)
-
-    def _finish_termination(self, pid):
-        with self._lock:
-            if self.launched_pid != pid:
-                return  # already handled (e.g. by a concurrent watchdog)
-            self._remove_pid_file()
-            self.launched_pid = None
-        bus.publish(Event.SERVER_STOPPED, {"pid": pid})
+def create_process_manager() -> OSProcessManager:
+    """Composition helper: pick the backend for this host."""
+    if platform.system().lower() == "linux":
+        if getattr(settings, "useLGSM", False):
+            return LGSMProcessManager()
+        return LinuxProcessManager()
+    return WindowsProcessManager()

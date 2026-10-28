@@ -5,7 +5,7 @@ import os
 import time
 import threading
 import logging
-from src.events import bus, Event
+from src.events import EventBus, Event
 
 logger = logging.getLogger(__name__)
 
@@ -13,11 +13,12 @@ logger = logging.getLogger(__name__)
 class PlayerManager:
     """Manages player data including online and offline players with timestamps."""
 
-    def __init__(self):
+    def __init__(self, bus: EventBus, data_file: Optional[str] = None):
         self.players = {}  # Single dict: {steam_id: player_data}
-        self.data_file = os.path.join("data", "players.json")
+        self.data_file = data_file or os.path.join("data", "players.json")
         self.version = 1
         self._lock = threading.RLock()
+        self.bus = bus
         self._load_player_data()
 
     def _load_player_data(self):
@@ -84,8 +85,13 @@ class PlayerManager:
             "level": player_info[3] if len(player_info) > 3 else "Unknown",
         }
 
+    def _mark_offline(self, steam_id: str, player_data: dict):
+        if player_data.get("currently_online"):
+            self.bus.publish(Event.PLAYER_LEFT, {"steam_id": steam_id})
+        player_data["currently_online"] = False
+
     def update_players_from_server(self, current_players: List[List[str]]):
-        """Update player data from server information - tracks online/offline status."""
+        """Apply a successful roster and track online/offline status."""
         if not settings.enablePlayerTracking:
             with self._lock:
                 self.players = {}
@@ -104,7 +110,7 @@ class PlayerManager:
                     current_player_steam_ids.add(steam_id)
                     # Update or add player as online
                     if steam_id not in self.players:
-                        bus.publish(
+                        self.bus.publish(
                             Event.PLAYER_JOINED,
                             {"steam_id": steam_id, **extracted_info},
                         )
@@ -114,13 +120,28 @@ class PlayerManager:
                         "last_online": current_time,
                     }
 
-            # Mark players as offline if they's not in current list
+            # Mark players as offline if they're not in current list
             for steam_id, player_data in self.players.items():
                 if steam_id not in current_player_steam_ids:
-                    if player_data.get("currently_online"):
-                        bus.publish(Event.PLAYER_LEFT, {"steam_id": steam_id})
-                    player_data["currently_online"] = False
+                    self._mark_offline(steam_id, player_data)
 
+            self._save_player_data()
+
+    def mark_all_offline(self):
+        """Release tracked players when the server goes down.
+
+        Keeps the records (last-known players, last-seen time) so the
+        dashboard can still show who was online.
+        """
+        if not settings.enablePlayerTracking:
+            with self._lock:
+                self.players = {}
+                self._save_player_data()
+            return
+
+        with self._lock:
+            for steam_id, player_data in self.players.items():
+                self._mark_offline(steam_id, player_data)
             self._save_player_data()
 
     def get_all_players(self) -> List[Dict[str, Any]]:

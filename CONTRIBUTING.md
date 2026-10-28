@@ -70,10 +70,11 @@ Palworld server and are run in CI.
   the server process.
 - `test_autostop`: verify the monitor stops the server when no players are
   online.
-- `test_dummy_api`: verify the dummy PalServer implements the real REST API
-  contract.
 - `test_web_ui`: log in, start/stop the server, and manage players through the
   browser.
+
+The dummy REST API contract tests live in `test/integration/test_dummy_api.py`
+and run with `uv run poe test`, not the smoke suite.
 
 ## Release QA
 

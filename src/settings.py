@@ -13,7 +13,6 @@
 
 import yaml
 import logging
-import traceback
 import os
 import shutil
 import subprocess
@@ -24,46 +23,54 @@ PALWORLD_EXE_ARGUMENTS = (
     "-NumberOfWorkerThreadsServer=16 -restapi"
 )
 
+DEFAULT_SECURITY_SETTINGS = {
+    "sessionSecretKey": None,
+    "sessionTimeout": 3600,
+    "maxLoginAttempts": 5,
+    "lockoutDuration": 300,
+    "rateLimitEnabled": True,
+    "rateLimitRequests": 100,
+    "rateLimitWindow": 60,
+}
+
 
 class Settings:
+    """Application settings held as attributes; item access mirrors attribute access."""
+
     def __init__(self):
-        self.settings = {
-            "palworldServerExePath": None,
-            "palworldExeArguments": PALWORLD_EXE_ARGUMENTS,
-            "palworldServerHost": "localhost",
-            "palworldServerPort": 8211,
-            "palworldRESTPort": 8212,
-            "palworldServerAdminPassword": None,
-            "useLGSM": False,
-            "protocol": "REST",
-            "useWebServer": True,
-            "webServerPort": 8213,
-            "controlServerThroughWeb": True,
-            "showServerIPAddress": False,
-            "autoStart": True,
-            "autoStop": True,
-            "autoStopDelay": 120,
-            "enablePlayerTracking": True,
-            "pollingRate": 5,
-            "webUsername": "admin",
-            "webPassword": None,
-            "sessionSecretKey": None,
-            "sessionTimeout": 3600,
-            "maxLoginAttempts": 5,
-            "lockoutDuration": 300,
-            "rateLimitEnabled": True,
-            "rateLimitRequests": 100,
-            "rateLimitWindow": 60,
-        }
-        for key, value in self.settings.items():
-            setattr(self, key, value)
+        vars(self).update(
+            {
+                "palworldServerExePath": None,
+                "palworldExeArguments": PALWORLD_EXE_ARGUMENTS,
+                "palworldServerHost": "localhost",
+                "palworldServerPort": 8211,
+                "palworldRESTPort": 8212,
+                "palworldServerAdminPassword": None,
+                "useLGSM": False,
+                "protocol": "REST",
+                "useWebServer": True,
+                "webServerPort": 8213,
+                "controlServerThroughWeb": True,
+                "showServerIPAddress": False,
+                "autoStart": True,
+                "autoStop": True,
+                "autoStopDelay": 120,
+                "enablePlayerTracking": True,
+                "pollingRate": 5,
+                "webUsername": "admin",
+                "webPassword": None,
+                **DEFAULT_SECURITY_SETTINGS,
+            }
+        )
 
     def __getitem__(self, key):
-        return self.settings[key]
+        return getattr(self, key)
 
     def __setitem__(self, key, value):
-        self.settings[key] = value
         setattr(self, key, value)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
 
     def _ensure_session_secret_key(self, settings_file_path):
         """Load or generate a session secret key."""
@@ -73,20 +80,18 @@ class Settings:
                 with open(key_file, "r") as f:
                     saved = f.read().strip()
                 if saved and len(saved) == 64:
-                    self.settings["sessionSecretKey"] = saved
-                    setattr(self, "sessionSecretKey", saved)
+                    self.sessionSecretKey = saved
                     return
         except OSError:
             pass
 
-        if self.settings.get("sessionSecretKey"):
+        if self.sessionSecretKey:
             return
 
-        self.settings["sessionSecretKey"] = secrets.token_hex(32)
-        setattr(self, "sessionSecretKey", self.settings["sessionSecretKey"])
+        self.sessionSecretKey = secrets.token_hex(32)
         try:
             with open(key_file, "w") as f:
-                f.write(self.settings["sessionSecretKey"])
+                f.write(self.sessionSecretKey)
             logging.info("Auto-generated sessionSecretKey and saved to session_secret.key")
         except OSError:
             pass
@@ -159,16 +164,14 @@ class Settings:
                 flat_settings = self._load_nested_settings(file_data)
 
                 for key, value in flat_settings.items():
-                    self.settings[key] = value
-                    setattr(self, key, value)
+                    self[key] = value
                 print("Settings loaded successfully.")
         except FileNotFoundError:
             logging.warning(f"Settings file not found: {file_path}")
         except yaml.YAMLError as e:
             logging.warning(f"Error: Invalid YAML format in {file_path}: {e}")
-        except Exception as e:
-            logging.error(f"Error from readSettings: {e}")
-            logging.error(traceback.format_exc())
+        except Exception:
+            logging.exception("Error from readSettings")
 
         self._ensure_session_secret_key(file_path)
 
@@ -180,13 +183,13 @@ class Settings:
         """
         errors = []
 
-        if not self.settings.get("palworldServerExePath"):
+        if not self.get("palworldServerExePath"):
             errors.append("palworldServerExePath is required")
 
-        if not self.settings.get("palworldServerAdminPassword"):
+        if not self.get("palworldServerAdminPassword"):
             errors.append("palworldServerAdminPassword is required")
 
-        if self.settings.get("useWebServer", True) and not self.settings.get("webPassword"):
+        if self.get("useWebServer", True) and not self.get("webPassword"):
             errors.append("webPassword is required when useWebServer is enabled")
 
         # Validate port ranges (1-65535) for all configured ports
@@ -203,8 +206,8 @@ class Settings:
                 errors.append(f"{name} is not a valid integer: {value}")
 
         # Check that server executable (or, in LGSM mode, the LGSM script) exists
-        server_exe_path = self.settings.get("palworldServerExePath")
-        what = "LGSM script" if self.settings.get("useLGSM") else "Palworld server executable"
+        server_exe_path = self.get("palworldServerExePath")
+        what = "LGSM script" if self.get("useLGSM") else "Palworld server executable"
         if server_exe_path:
             resolved = shutil.which(server_exe_path) or server_exe_path
             if not os.path.exists(resolved):
@@ -219,10 +222,17 @@ class Settings:
             raise ValueError(error_message)
 
     def get_git_hash(self):
-        """Return the current git commit hash.
+        """Return the current git commit hash, read once per instance.
+
         Tries to use `git rev-parse HEAD`. If git is not available or the command fails,
         returns None.
         """
+        if not hasattr(self, "_git_hash"):
+            self._git_hash = self._read_git_hash()
+        return self._git_hash
+
+    @staticmethod
+    def _read_git_hash():
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "HEAD"],

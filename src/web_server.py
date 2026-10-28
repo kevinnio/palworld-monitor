@@ -11,6 +11,7 @@
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
 
+import contextlib
 import os
 import sys
 import socket
@@ -31,19 +32,26 @@ from flask_limiter.util import get_remote_address
 from datetime import timedelta
 from src.settings import settings
 from src.palworld_control import PalWorldController
+from src.events import EventBus, Event
 from src.auth import User, LoginAttemptTracker
 import logging
 import threading
 
 
 class WebServer:
-    def __init__(self, palworld_controller: PalWorldController):
+    def __init__(
+        self,
+        palworld_controller: PalWorldController,
+        bus: EventBus,
+    ):
         """Initialize the web server with a PalWorld controller instance.
 
         Args:
             palworld_controller: Instance of PalWorldController to handle server operations
+            bus: Notification bus carrying committed lifecycle/roster state
         """
         self.palworld_controller = palworld_controller
+        self.bus = bus
 
         if getattr(sys, "frozen", False):
             base = sys._MEIPASS
@@ -56,14 +64,9 @@ class WebServer:
         )
         self.ip = "Unknown"
 
-        # Server state cache
-        self.state_cache = {
-            "running": False,
-            "playerCount": 0,
-            "players": [],
-            "banned_players": [],
-        }
         self._lock = threading.RLock()
+        self.snapshot = self._read_snapshot()
+        self._subscribed = False
 
         # Configure session
         self.app.secret_key = settings.sessionSecretKey
@@ -74,16 +77,18 @@ class WebServer:
         # Initialize CSRF protection
         self.csrf = CSRFProtect(self.app)
 
-        # Initialize rate limiter
-        if settings.rateLimitEnabled:
-            self.limiter = Limiter(
-                app=self.app,
-                key_func=get_remote_address,
-                storage_uri="memory://",
-                default_limits=[
-                    f"{settings.rateLimitRequests} per {settings.rateLimitWindow} seconds"
-                ],
-            )
+        # Initialize rate limiter. Login is exempt: LoginAttemptTracker owns
+        # that throttle, and both counting the same request would lock out
+        # at an unpredictable attempt count.
+        self.limiter = Limiter(
+            app=self.app,
+            key_func=get_remote_address,
+            storage_uri="memory://",
+            default_limits=[
+                f"{settings.rateLimitRequests} per {settings.rateLimitWindow} seconds"
+            ],
+            enabled=settings.rateLimitEnabled,
+        )
 
         # Initialize Flask-login
         self.login_manager = LoginManager()
@@ -104,135 +109,80 @@ class WebServer:
                 return User(user_id)
             return None
 
-        # Register custom filters
-        self._register_filters()
-
         # Register routes
         self._register_routes()
-
-        # Subscribe to events to update state cache
-        from src.events import bus, Event
-
-        bus.subscribe(Event.SERVER_STARTED, self._on_server_started)
-        bus.subscribe(Event.SERVER_STOPPED, self._on_server_stopped)
-        bus.subscribe(Event.SERVER_STATUS, self._on_server_status)
-        bus.subscribe(Event.BAN_ADDED, self._on_ban_changed)
-        bus.subscribe(Event.BAN_REMOVED, self._on_ban_changed)
 
         self._sse_clients: list[queue.Queue] = []
         self._sse_lock = threading.RLock()
 
-        self._sync_running_state()
-        self._sync_banned_players()
-        self._sync_players()
+        self._subscribe()
 
-    def _sync_running_state(self):
-        """Sync the cached running flag with the actual process state."""
+    # ------------------------------------------------------------------
+    # Committed state
+    # ------------------------------------------------------------------
+
+    def _subscribe(self):
+        if self._subscribed:
+            return
+        self.bus.subscribe(Event.SERVER_STARTED, self._on_committed)
+        self.bus.subscribe(Event.SERVER_STOPPED, self._on_committed)
+        self.bus.subscribe(Event.SERVER_STATUS, self._on_committed)
+        self.bus.subscribe(Event.LIFECYCLE_CHANGED, self._on_committed)
+        self.bus.subscribe(Event.BAN_ADDED, self._on_committed)
+        self.bus.subscribe(Event.BAN_REMOVED, self._on_committed)
+        self._subscribed = True
+
+    def close(self):
+        if not self._subscribed:
+            return
+        self.bus.unsubscribe(Event.SERVER_STARTED, self._on_committed)
+        self.bus.unsubscribe(Event.SERVER_STOPPED, self._on_committed)
+        self.bus.unsubscribe(Event.SERVER_STATUS, self._on_committed)
+        self.bus.unsubscribe(Event.LIFECYCLE_CHANGED, self._on_committed)
+        self.bus.unsubscribe(Event.BAN_ADDED, self._on_committed)
+        self.bus.unsubscribe(Event.BAN_REMOVED, self._on_committed)
+        self._subscribed = False
+
+    def _read_snapshot(self) -> dict:
+        snapshot = dict(self.palworld_controller.get_snapshot())
+        snapshot["revision"] = snapshot.get("revision", 0)
+        snapshot["players"] = list(snapshot.get("players", []))
+        snapshot["banned_players"] = list(snapshot.get("banned_players", []))
+        return snapshot
+
+    def _cache_snapshot(self, snapshot: dict) -> dict:
+        """Keep the newest snapshot; equal revisions refresh ban data."""
+        if snapshot["revision"] >= self.snapshot.get("revision", 0):
+            self.snapshot = snapshot
+        return snapshot
+
+    def _refresh_snapshot(self) -> dict:
+        """Take one consistent snapshot and cache it for this notification."""
         with self._lock:
-            self.state_cache["running"] = (
-                self.palworld_controller.is_palworld_process_running()
-            )
+            return self._cache_snapshot(self._read_snapshot())
 
-    def _sync_banned_players(self):
-        """Sync the cached banned list with the actual banlist file."""
+    def _on_committed(self, data=None):
+        # Serialize refresh+broadcast so concurrent notifications and ban
+        # request threads cannot emit snapshots out of revision order.
         with self._lock:
-            self.state_cache["banned_players"] = list(
-                self.palworld_controller.get_banned_players()
-            )
+            snapshot = self._read_snapshot()
+            if snapshot["revision"] < self.snapshot.get("revision", 0):
+                return
+            self.snapshot = snapshot
+            self._broadcast_sse(self._payload(snapshot))
 
-    def _sync_players(self):
-        """Sync the cached player list with PlayerManager's last-known state.
-
-        Without this, state_cache["players"] stays at its [] default for
-        the entire monitor session whenever the server is already offline
-        at startup (no SERVER_STATUS/SERVER_STOPPED event ever fires to
-        populate it). The SSE stream's initial snapshot to each newly
-        connected client is built from this cache, so every page load would
-        show "No players found" until some other event happened to refresh
-        it -- even though a direct status fetch (the "update status"
-        button) already queries PlayerManager fresh and shows it correctly.
-        """
-        with self._lock:
-            self.state_cache["players"] = list(
-                self.palworld_controller.get_players_for_web()
-            )
-            self.state_cache["playerCount"] = len(
-                self.palworld_controller.player_manager.get_online_players()
-            )
-
-    def _on_server_started(self, data):
-        with self._lock:
-            self.state_cache["running"] = True
-            # Player list will be populated by the update thread via PLAYER_JOINED events.
-
-    def _on_server_stopped(self, data):
-        # Route through the status handler so connected dashboards get the
-        # change over SSE: the poll thread that used to push it stops with
-        # this event. PlayerManager has already released the players by now,
-        # so the refresh keeps showing them (offline, with last-seen time)
-        # instead of "No players found".
-        with self._lock:
-            banned_players = list(self.state_cache["banned_players"])
-        self._on_server_status(
-            {
-                "running": False,
-                "playerCount": 0,
-                "players": [],
-                "banned_players": banned_players,
-            }
-        )
-
-    def _on_server_status(self, data):
-        with self._lock:
-            self.state_cache["running"] = data.get("running", False)
-            self.state_cache["playerCount"] = data.get("playerCount", 0)
-            # Use the processed player records (PlayerManager), not the raw
-            # REST tuples in `data["players"]` — the frontend expects
-            # objects with .name/.level/.steam_id, not positional lists.
-            self.state_cache["players"] = list(
-                self.palworld_controller.get_players_for_web()
-            )
-            self._sync_banned_players()
-            players = list(self.state_cache["players"])
-            total_player_count = len(
-                self.palworld_controller.player_manager.get_online_players()
-            )
-            payload = {
-                "data": dict(self.state_cache),
-                "players": players,
-                "banned_players": list(self.state_cache["banned_players"]),
-                "total_player_count": total_player_count,
-                "autoStopDelay": round(settings.autoStopDelay),
-            }
-            self._broadcast_sse(payload)
-
-    def _on_ban_changed(self, data):
-        with self._lock:
-            self._on_server_status(dict(self.state_cache))
-
-    def _register_filters(self):
-        """Register custom Jinja2 filters."""
-
-        @self.app.template_filter("datetime")
-        def format_datetime(timestamp):
-            """Format timestamp to readable datetime string."""
-            try:
-                if isinstance(timestamp, (int, float)):
-                    from datetime import datetime
-
-                    return datetime.fromtimestamp(timestamp).strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    )
-                else:
-                    return str(timestamp)
-            except Exception:
-                return str(timestamp)
+    def _payload(self, snapshot: dict) -> dict:
+        return {
+            "data": dict(snapshot),
+            "autoStopDelay": round(settings.autoStopDelay),
+        }
 
     def _register_routes(self):
         """Register Flask routes with the application."""
 
         @self.app.route("/login", methods=["GET", "POST"])
         @self.csrf.exempt
+        @self.limiter.exempt
         def login():
             return self._handle_login()
 
@@ -282,9 +232,13 @@ class WebServer:
     # SSE helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _sse_message(payload) -> str:
+        return f"data: {json.dumps(payload)}\n\n"
+
     def _broadcast_sse(self, payload):
         """Push *payload* to every connected SSE client."""
-        text = f"data: {json.dumps(payload)}\n\n"
+        text = self._sse_message(payload)
         with self._sse_lock:
             dead = []
             for q in self._sse_clients:
@@ -299,20 +253,16 @@ class WebServer:
         """Return a streaming response that pushes server-status events."""
         q: queue.Queue = queue.Queue(maxsize=32)
         with self._lock:
-            self._sync_banned_players()
-            snapshot = {
-                "data": dict(self.state_cache),
-                "players": list(self.state_cache["players"]),
-                "banned_players": list(self.state_cache["banned_players"]),
-                "total_player_count": self.state_cache["playerCount"],
-                "autoStopDelay": round(settings.autoStopDelay),
-            }
+            # Capture the initial snapshot before the queue can receive events,
+            # all under the same lock as refresh/broadcast.
+            snapshot = self._cache_snapshot(self._read_snapshot())
             with self._sse_lock:
                 self._sse_clients.append(q)
+            initial_payload = self._payload(snapshot)
 
         def generate():
             try:
-                yield f"data: {json.dumps(snapshot)}\n\n"
+                yield self._sse_message(initial_payload)
 
                 while True:
                     try:
@@ -322,11 +272,8 @@ class WebServer:
                         # Send a keepalive comment so the connection isn't dropped
                         yield ": keepalive\n\n"
             finally:
-                with self._sse_lock:
-                    try:
-                        self._sse_clients.remove(q)
-                    except ValueError:
-                        pass
+                with self._sse_lock, contextlib.suppress(ValueError):
+                    self._sse_clients.remove(q)
 
         return Response(generate(), mimetype="text/event-stream")
 
@@ -382,43 +329,35 @@ class WebServer:
         return render_template("login.html")
 
     def _get_server_ip(self):
-        """Get the server IP address."""
+        """Return this host's address on the interface that routes off-host."""
         try:
-            ip = socket.gethostbyname(socket.gethostname())
-            ip = ip + ":" + str(settings.webServerPort)
-            return ip
-        except Exception as e:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                # No packets are sent; this only asks the routing table which
+                # interface would carry traffic, unlike gethostbyname(), which
+                # fails or returns loopback on hosts with no resolvable name.
+                probe.connect(("8.8.8.8", 80))
+                lan_ip = probe.getsockname()[0]
+        except OSError as e:
             logging.warning(f"Error while getting server IP: {e}")
             return "unknown"
+        return f"{lan_ip}:{settings.webServerPort}"
 
     def _json_state(self, **extra):
-        """Build a JSON response dict from the current server state."""
-        with self._lock:
-            self._sync_banned_players()
-            return jsonify(
-                data=dict(self.state_cache),
-                players=list(self.palworld_controller.get_players_for_web()),
-                total_player_count=len(
-                    self.palworld_controller.player_manager.get_online_players()
-                ),
-                autoStopDelay=round(settings.autoStopDelay),
-                banned_players=list(self.state_cache["banned_players"]),
-                **extra,
-            )
+        """Build a JSON response dict from one consistent committed snapshot."""
+        return jsonify(
+            data=self._refresh_snapshot(),
+            autoStopDelay=round(settings.autoStopDelay),
+            **extra,
+        )
 
     def _handle_index(self):
         """Handle the main page route."""
-        with self._lock:
-            self._sync_banned_players()
-            players = list(self.palworld_controller.get_players_for_web())
-            total_player_count = len(
-                self.palworld_controller.player_manager.get_online_players()
-            )
-            current_server_info = dict(self.state_cache)
-            if settings.showServerIPAddress:
-                current_server_info["IPAddress"] = self._get_server_ip()
-            else:
-                current_server_info["IPAddress"] = "Unknown"
+        snapshot = self._refresh_snapshot()
+        current_server_info = dict(snapshot)
+        if settings.showServerIPAddress:
+            current_server_info["IPAddress"] = self._get_server_ip()
+        else:
+            current_server_info["IPAddress"] = "Unknown"
 
         theme = request.cookies.get("theme", "light")
         if theme not in ["light", "dark"]:
@@ -430,8 +369,6 @@ class WebServer:
             showServerIPAddress=settings.showServerIPAddress,
             autoStopEnabled=settings.autoStop,
             data=current_server_info,
-            players=players,
-            total_player_count=total_player_count,
             autoStopDelay=round(settings.autoStopDelay),
             initialTheme=theme,
             git_hash=settings.get_git_hash(),
@@ -450,55 +387,50 @@ class WebServer:
             self.palworld_controller.stop_server()
         return self._json_state()
 
-    def _handle_kick(self):
-        """Handle player kick request."""
+    def _handle_player_action(self, log_verb, success_message, fail_message, action):
         steam_id = request.form.get("steam_id")
         if not steam_id or not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", steam_id):
             return jsonify(success=False, message="A valid Steam ID is required"), 400
         logging.info(
-            f"Kicked player {steam_id} by {current_user.username} from {request.remote_addr}"
+            f"{log_verb} player {steam_id} by {current_user.username} from {request.remote_addr}"
         )
-        success = self.palworld_controller.kick_player(steam_id)
+        success = action(steam_id)
         return self._json_state(
             success=success,
-            message=f"Player {'kicked successfully' if success else 'kick failed'}",
+            message=success_message if success else fail_message,
+        )
+
+    def _handle_kick(self):
+        """Handle player kick request."""
+        return self._handle_player_action(
+            "Kicked",
+            "Player kicked successfully",
+            "Player kick failed",
+            self.palworld_controller.kick_player,
         )
 
     def _handle_ban(self):
         """Handle player ban request."""
-        steam_id = request.form.get("steam_id")
-        if not steam_id or not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", steam_id):
-            return jsonify(success=False, message="A valid Steam ID is required"), 400
-        logging.info(
-            f"Banned player {steam_id} by {current_user.username} from {request.remote_addr}"
-        )
-        success = self.palworld_controller.ban_player(steam_id)
-        return self._json_state(
-            success=success,
-            message=f"Player {'banned successfully' if success else 'ban failed'}",
+        return self._handle_player_action(
+            "Banned",
+            "Player banned successfully",
+            "Player ban failed",
+            self.palworld_controller.ban_player,
         )
 
     def _handle_unban(self):
         """Handle player unban request."""
-        steam_id = request.form.get("steam_id")
-        if not steam_id or not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", steam_id):
-            return jsonify(success=False, message="A valid Steam ID is required"), 400
-        logging.info(
-            f"Unbanned player {steam_id} by {current_user.username} from {request.remote_addr}"
-        )
-        success = self.palworld_controller.unban_player(steam_id)
-        return self._json_state(
-            success=success,
-            message=f"Player {'unbanned successfully' if success else 'unban failed'}",
+        return self._handle_player_action(
+            "Unbanned",
+            "Player unbanned successfully",
+            "Player unban failed",
+            self.palworld_controller.unban_player,
         )
 
     def _handle_get_banned(self):
         """Handle request to get list of banned players."""
-        with self._lock:
-            self._sync_banned_players()
-            return jsonify(
-                success=True, banned_players=list(self.state_cache["banned_players"])
-            )
+        snapshot = self._refresh_snapshot()
+        return jsonify(success=True, banned_players=list(snapshot["banned_players"]))
 
     def run(self):
         """Start the web server.  Blocks the calling thread."""
