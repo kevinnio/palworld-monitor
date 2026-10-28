@@ -77,16 +77,18 @@ class WebServer:
         # Initialize CSRF protection
         self.csrf = CSRFProtect(self.app)
 
-        # Initialize rate limiter
-        if settings.rateLimitEnabled:
-            self.limiter = Limiter(
-                app=self.app,
-                key_func=get_remote_address,
-                storage_uri="memory://",
-                default_limits=[
-                    f"{settings.rateLimitRequests} per {settings.rateLimitWindow} seconds"
-                ],
-            )
+        # Initialize rate limiter. Login is exempt: LoginAttemptTracker owns
+        # that throttle, and both counting the same request would lock out
+        # at an unpredictable attempt count.
+        self.limiter = Limiter(
+            app=self.app,
+            key_func=get_remote_address,
+            storage_uri="memory://",
+            default_limits=[
+                f"{settings.rateLimitRequests} per {settings.rateLimitWindow} seconds"
+            ],
+            enabled=settings.rateLimitEnabled,
+        )
 
         # Initialize Flask-login
         self.login_manager = LoginManager()
@@ -106,9 +108,6 @@ class WebServer:
             if user_id == settings.webUsername:
                 return User(user_id)
             return None
-
-        # Register custom filters
-        self._register_filters()
 
         # Register routes
         self._register_routes()
@@ -178,29 +177,12 @@ class WebServer:
             "autoStopDelay": round(settings.autoStopDelay),
         }
 
-    def _register_filters(self):
-        """Register custom Jinja2 filters."""
-
-        @self.app.template_filter("datetime")
-        def format_datetime(timestamp):
-            """Format timestamp to readable datetime string."""
-            try:
-                if isinstance(timestamp, (int, float)):
-                    from datetime import datetime
-
-                    return datetime.fromtimestamp(timestamp).strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    )
-                else:
-                    return str(timestamp)
-            except Exception:
-                return str(timestamp)
-
     def _register_routes(self):
         """Register Flask routes with the application."""
 
         @self.app.route("/login", methods=["GET", "POST"])
         @self.csrf.exempt
+        @self.limiter.exempt
         def login():
             return self._handle_login()
 
@@ -347,14 +329,18 @@ class WebServer:
         return render_template("login.html")
 
     def _get_server_ip(self):
-        """Get the server IP address."""
+        """Return this host's address on the interface that routes off-host."""
         try:
-            ip = socket.gethostbyname(socket.gethostname())
-            ip = ip + ":" + str(settings.webServerPort)
-            return ip
-        except Exception as e:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                # No packets are sent; this only asks the routing table which
+                # interface would carry traffic, unlike gethostbyname(), which
+                # fails or returns loopback on hosts with no resolvable name.
+                probe.connect(("8.8.8.8", 80))
+                lan_ip = probe.getsockname()[0]
+        except OSError as e:
             logging.warning(f"Error while getting server IP: {e}")
             return "unknown"
+        return f"{lan_ip}:{settings.webServerPort}"
 
     def _json_state(self, **extra):
         """Build a JSON response dict from one consistent committed snapshot."""

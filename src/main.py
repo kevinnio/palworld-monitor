@@ -4,7 +4,6 @@
 import logging
 import os
 import sys
-import traceback
 
 from src.cli import parse_args, apply_overrides
 from src.banlist_manager import BanlistManager
@@ -137,7 +136,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
-        logging.error(f"Error from src.main routine: {e}")
-        logging.error(traceback.format_exc())
+    except Exception:
+        logging.exception("Error from src.main routine")
         sys.exit(1)

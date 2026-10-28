@@ -78,6 +78,14 @@ class OSProcessManager:
         except Exception:
             return ProcessIdentity(pid, None)
 
+    @staticmethod
+    def _identity_of(process) -> ProcessIdentity:
+        """Identity of a live process, with create time left unknown if unreadable."""
+        try:
+            return ProcessIdentity(process.pid, process.create_time())
+        except psutil.Error:
+            return ProcessIdentity(process.pid, None)
+
     def _save_pid_to_file(self, pid):
         try:
             with open(self.pid_file_name(), "w") as f:
@@ -128,12 +136,11 @@ class OSProcessManager:
             return False
 
         try:
-            if identity.create_time is not None:
-                try:
-                    if abs(process.create_time() - identity.create_time) > 0.01:
-                        return False
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
+            # An unreadable create time counts as a match, as it always has.
+            if identity.create_time is not None and not identity.matches(
+                self._identity_of(process)
+            ):
+                return False
 
             if process.status() == psutil.STATUS_ZOMBIE:
                 return False
@@ -229,13 +236,9 @@ class OSProcessManager:
 
         try:
             process = psutil.Process(current.pid)
-            if current.create_time is not None:
-                try:
-                    if abs(process.create_time() - current.create_time) > 0.01:
-                        # The PID now belongs to a replacement; leave it alone.
-                        return False
-                except psutil.Error:
-                    pass
+            if not current.matches(self._identity_of(process)):
+                # The PID now belongs to a replacement; leave it alone.
+                return False
             children = process.children(recursive=True)
         except psutil.NoSuchProcess:
             self.clear_identity(current)

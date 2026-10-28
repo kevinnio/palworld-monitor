@@ -14,16 +14,16 @@
 """Auto-start manager: listens for Palworld client packets and launches the server."""
 
 import contextlib
+import logging
 import socket
+import threading
+import time
+from typing import Optional
+
 from src.events import EventBus, Event
-from src.settings import settings
 from src.lifecycle.messages import LifecycleState
 from src.palworld_control import PalWorldController
-import logging
-import threading
-import traceback
-from typing import Optional
-import time
+from src.settings import settings
 
 
 class AutoStartManager:
@@ -99,8 +99,7 @@ class AutoStartManager:
                     time.sleep(retry_delay)
                     continue
                 else:
-                    logging.error(f"Error opening PalWorld port socket: {e}")
-                    logging.error(traceback.format_exc())
+                    logging.exception("Error opening PalWorld port socket")
                     return False
         return False
 
@@ -116,9 +115,8 @@ class AutoStartManager:
         logging.debug("No longer listening on PalWorld Server port")
         try:
             sock.close()
-        except Exception as e:
-            logging.error(f"Error closing PalWorld port socket: {e}")
-            logging.error(traceback.format_exc())
+        except Exception:
+            logging.exception("Error closing PalWorld port socket")
             return False
         return True
 
@@ -144,12 +142,10 @@ class AutoStartManager:
                 if self.is_aborting:
                     logging.debug(f"Auto-start listener closed: {e}")
                     return False
-                logging.error(f"Error in wait_for_player_connection: {e}")
-                logging.error(traceback.format_exc())
+                logging.exception("Error in wait_for_player_connection")
                 return False
-            except Exception as e:
-                logging.error(f"Error in wait_for_player_connection: {e}")
-                logging.error(traceback.format_exc())
+            except Exception:
+                logging.exception("Error in wait_for_player_connection")
                 return False
         return False
 

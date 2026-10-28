@@ -2,7 +2,6 @@
 # Copyright (c) 2026 Kevin Perez - Modified work
 
 import logging
-import traceback
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -36,9 +35,8 @@ class RestClient:
         except requests.exceptions.RequestException as e:
             logging.error(f"Error making GET request to {endpoint}: {e}")
             return None
-        except Exception as e:
-            logging.error(f"Unexpected error in GET request to {endpoint}: {e}")
-            logging.error(traceback.format_exc())
+        except Exception:
+            logging.exception(f"Unexpected error in GET request to {endpoint}")
             return None
 
     def _make_post_request(self, endpoint, data=None):
@@ -56,9 +54,8 @@ class RestClient:
         except requests.exceptions.RequestException as e:
             logging.error(f"Error making POST request to {endpoint}: {e}")
             return False
-        except Exception as e:
-            logging.error(f"Unexpected error in POST request to {endpoint}: {e}")
-            logging.error(traceback.format_exc())
+        except Exception:
+            logging.exception(f"Unexpected error in POST request to {endpoint}")
             return False
 
     def get_player_count(self):

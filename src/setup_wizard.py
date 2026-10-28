@@ -257,9 +257,11 @@ def print_web_link(port):
     """Print localhost and LAN links to the web admin UI."""
     print(f"\n  > Web admin UI: http://localhost:{port}")
     try:
-        lan_ip = socket.gethostbyname(socket.gethostname())
-        if lan_ip not in ("127.0.0.1", "0.0.0.0"):
-            print(f"  > LAN:          http://{lan_ip}:{port}")
-    except Exception:
-        pass
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("8.8.8.8", 80))
+            lan_ip = probe.getsockname()[0]
+    except OSError:
+        lan_ip = None
+    if lan_ip and lan_ip not in ("127.0.0.1", "0.0.0.0"):
+        print(f"  > LAN:          http://{lan_ip}:{port}")
     print()
