@@ -46,6 +46,7 @@ Run the ones matching changed areas, plus at least two unrelated ones.
 | E18 | bans | Native pair entries | Seed a disposable banlist with `steam_id,player_uid` entries and comments; ban, reload, unban one entry | One row per Steam ID; unban removes only the target entry; unrelated pairs and comments stay intact |
 | E19 | bans | Rejected and failed moderation | Submit an invalid ID through the page fetch path; cancel a confirmation; make the banlist unwritable | Invalid IDs get HTTP 400 before the API call; cancel sends nothing; storage failure shows a failure alert and keeps visible ban state |
 | E20 | bans/live server | Live PalServer moderation | With a real PalServer running and auto-stop disabled, ban then unban an agreed synthetic ID through the built app | REST returns 200; the native `Pal/Saved/SaveGames/banlist.txt` gains then loses only that ID; pre-existing bans and players are untouched; the server keeps running |
+| E21 | lifecycle | Startup adoption with stale state | Leave a dummy running, plus a PID file naming a dead PID and persisted online players; start the monitor | Adopts the live dummy as RUNNING without launching a second process; stale PID and ghost roster are cleared |
 
 ## Change-sensitive map
 
