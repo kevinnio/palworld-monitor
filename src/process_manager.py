@@ -26,6 +26,37 @@ from src.lifecycle.messages import ProcessIdentity, ProcessSnapshot
 from src.settings import settings
 
 
+def _terminate_and_wait(processes, timeout) -> list:
+    """SIGTERM, then SIGKILL stragglers. Returns the processes still alive."""
+    for process in processes:
+        with contextlib.suppress(psutil.NoSuchProcess):
+            process.terminate()
+    _gone, alive = psutil.wait_procs(processes, timeout=timeout)
+    for process in alive:
+        with contextlib.suppress(psutil.NoSuchProcess):
+            process.kill()
+    _gone, alive = psutil.wait_procs(alive, timeout=10)
+    return alive
+
+
+def _matches_target(info, target) -> bool:
+    """True when a process info dict is the exe, process name or script we want."""
+    if target in (info.get("exe") or "").lower():
+        return True
+
+    pname = (info.get("name") or "").lower()
+    if target in pname:
+        return True
+
+    cmdline = info.get("cmdline") or []
+    if "python" not in pname or len(cmdline) < 2:
+        return False
+
+    script = cmdline[-1]
+    # Skip -c scripts (contain newlines)
+    return "\n" not in script and target in os.path.basename(script).lower()
+
+
 class OSProcessManager:
     def __init__(self):
         self._lock = threading.Lock()
@@ -118,6 +149,13 @@ class OSProcessManager:
             return False
 
     def find_process_identity(self, name) -> Optional[ProcessIdentity]:
+        """Return the first matching process, preferring the tracked instance.
+
+        With two PalServers on one host the scan order is arbitrary, so keep
+        managing the one we already own instead of switching to a stranger.
+        """
+        tracked = self.tracked_identity
+        first = None
         try:
             target = (name or "").lower()
             if not target:
@@ -129,23 +167,14 @@ class OSProcessManager:
                     info = proc.info
                     if info.get("status") == psutil.STATUS_ZOMBIE:
                         continue
-
-                    exe = (info.get("exe") or "").lower()
-                    pname = (info.get("name") or "").lower()
-                    cmdline = info.get("cmdline") or []
-                    if target in exe or target in pname:
-                        return ProcessIdentity(info["pid"], info.get("create_time"))
-                    # Check script basename for Python processes running a .py file
-                    if "python" not in pname:
+                    if not _matches_target(info, target):
                         continue
-                    if cmdline and len(cmdline) > 1:
-                        script = cmdline[-1]
-                        # Skip -c scripts (contain newlines)
-                        if (
-                            "\n" not in script
-                            and target in os.path.basename(script).lower()
-                        ):
-                            return ProcessIdentity(info["pid"], info.get("create_time"))
+
+                    candidate = ProcessIdentity(info["pid"], info.get("create_time"))
+                    if tracked is not None and candidate.matches(tracked):
+                        return candidate
+                    if first is None:
+                        first = candidate
                 except (
                     psutil.NoSuchProcess,
                     psutil.AccessDenied,
@@ -154,7 +183,7 @@ class OSProcessManager:
                     continue
         except Exception:
             pass
-        return None
+        return first
 
     def observe(self) -> ProcessSnapshot:
         """I/O-only observation for the lifecycle supervisor."""
@@ -188,7 +217,8 @@ class OSProcessManager:
 
         Returns True when the expected process is gone, False when it is still
         running after a failed attempt, and None while shutdown is pending.
-        The runtime's process detection observes pending shutdowns.
+        The runtime's process detection observes pending shutdowns. A stop only
+        succeeds once the process and its children are gone.
         """
         with self._lock:
             current = self._identity
@@ -207,19 +237,6 @@ class OSProcessManager:
                 except psutil.Error:
                     pass
             children = process.children(recursive=True)
-            for child in children:
-                child.terminate()
-            process.terminate()
-            try:
-                process.wait(timeout=30)
-            except psutil.TimeoutExpired:
-                process.kill()
-                try:
-                    process.wait(timeout=10)
-                except psutil.TimeoutExpired:
-                    return False
-            self.clear_identity(current)
-            return True
         except psutil.NoSuchProcess:
             self.clear_identity(current)
             return True
@@ -227,6 +244,19 @@ class OSProcessManager:
             return False
         except Exception:
             return False
+
+        # A child may exit before the signal reaches it; only the parent's own
+        # exit proves the server stopped.
+        for child in children:
+            with contextlib.suppress(psutil.NoSuchProcess):
+                child.terminate()
+        if _terminate_and_wait([process], timeout=30):
+            return False
+        # Children that outlive the parent keep the game ports open.
+        if _terminate_and_wait(children, timeout=10):
+            return False
+        self.clear_identity(current)
+        return True
 
 
 class WindowsProcessManager(OSProcessManager):

@@ -1,16 +1,18 @@
 """Shared process backend contracts, run against the host's native backend."""
 
+import contextlib
 import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import psutil
 import pytest
 
 from src.lifecycle.messages import ProcessIdentity
 from src.process_manager import LinuxProcessManager, WindowsProcessManager
-from test.support import get_python_executable
+from test.support import get_python_executable, wait_until
 
 
 @pytest.fixture(
@@ -133,6 +135,92 @@ def test_terminate_nonexistent_process(manager):
 
 def test_identity_is_running_with_dead_pid(manager):
     assert manager.identity_is_running(ProcessIdentity(99999999, None)) is False
+
+
+def test_find_process_identity_prefers_the_tracked_instance(manager, monkeypatch):
+    first = ProcessIdentity(5001, 50.0)
+    tracked = ProcessIdentity(5002, 50.0)
+    manager.set_known_identity(tracked)
+
+    def fake_process_iter(attrs=None):
+        for identity in (first, tracked):
+            yield SimpleNamespace(
+                info={
+                    "pid": identity.pid,
+                    "name": "palserver.exe",
+                    "exe": "",
+                    "cmdline": [],
+                    "create_time": identity.create_time,
+                    "status": "running",
+                }
+            )
+
+    monkeypatch.setattr(psutil, "process_iter", fake_process_iter)
+
+    assert manager.find_process_identity("PalServer") == tracked
+
+    manager.clear_identity(tracked)
+    assert manager.find_process_identity("PalServer") == first
+
+
+def test_child_that_exits_before_terminate_does_not_mask_a_live_parent(
+    manager, running_server, test_sleep_script, monkeypatch
+):
+    child = subprocess.Popen(
+        [get_python_executable(), str(Path(test_sleep_script).resolve())]
+    )
+    child_process = psutil.Process(child.pid)
+
+    def exit_then_raise(*_args, **_kwargs):
+        # The child exits on its own just before the signal is delivered.
+        with contextlib.suppress(psutil.NoSuchProcess):
+            child_process.kill()
+            child_process.wait(timeout=5)
+        raise psutil.NoSuchProcess(child_process.pid)
+
+    monkeypatch.setattr(child_process, "terminate", exit_then_raise)
+    monkeypatch.setattr(
+        psutil.Process, "children", lambda self, recursive=True: [child_process]
+    )
+
+    try:
+        assert manager.terminate_process(running_server) is True
+    finally:
+        child.wait(timeout=5)
+
+    assert manager.identity_is_running(running_server) is False
+    assert manager.tracked_identity is None
+
+
+def test_terminate_stops_child_processes(manager, tmp_path, test_sleep_script):
+    child_script = tmp_path / "spawn_child.py"
+    child_script.write_text(
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, {str(Path(test_sleep_script).resolve())!r}])\n"
+        "time.sleep(120)\n",
+        encoding="utf-8",
+    )
+    identity = manager.launch_process(get_python_executable(), str(child_script))
+    assert identity is not None
+    parent = psutil.Process(identity.pid)
+    children = []
+
+    try:
+        wait_until(lambda: parent.children(recursive=True), message="no child")
+        children = parent.children(recursive=True)
+
+        assert manager.terminate_process(identity) is True
+
+        wait_until(
+            lambda: not any(child.is_running() for child in children),
+            message="child survived the stop",
+        )
+        assert manager.identity_is_running(identity) is False
+    finally:
+        for process in [parent, *children]:
+            with contextlib.suppress(psutil.Error):
+                process.kill()
+                process.wait(timeout=5)
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux zombie process semantics")
