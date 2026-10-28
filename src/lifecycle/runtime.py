@@ -22,6 +22,9 @@ from src.settings import settings
 
 _SHUTDOWN = object()
 _WORKER_JOIN_TIMEOUT = 5
+# One LGSM command plus its startup detection; a launch or stop must finish
+# before close() returns, or it would act on a server we just shut down.
+_PROCESS_WORKER_JOIN_TIMEOUT = 150
 
 
 class LifecycleRuntime:
@@ -92,12 +95,15 @@ class LifecycleRuntime:
             self._observations.put(_SHUTDOWN)
             for requests in (self._poll_requests, self._process_requests):
                 requests.put(_SHUTDOWN)
-            threads = list(self._threads.values())
+            threads = list(self._threads.items())
 
-        for thread in threads:
+        for name, thread in threads:
             if thread is threading.current_thread():
                 continue
-            thread.join(timeout=_WORKER_JOIN_TIMEOUT)
+            timeout = _WORKER_JOIN_TIMEOUT
+            if name == "palworld-process":
+                timeout = _PROCESS_WORKER_JOIN_TIMEOUT
+            thread.join(timeout=timeout)
             if thread.is_alive():
                 logging.warning(f"Thread {thread.name} did not stop in time")
 

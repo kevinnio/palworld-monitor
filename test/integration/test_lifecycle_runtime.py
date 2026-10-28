@@ -219,3 +219,37 @@ class TestLifecycleRuntime:
     def test_command_before_start_is_rejected(self, runtime_env):
         runtime, _supervisor, _client, _pm, _bus = runtime_env
         assert runtime.submit_command(StopCommand()) is False
+
+    def test_close_waits_for_an_in_flight_process_command(
+        self, runtime_env, monkeypatch
+    ):
+        runtime, supervisor, _client, pm, _bus = runtime_env
+        supervisor.server_starting_cooldown = 0
+        monkeypatch.setattr("src.lifecycle.runtime._WORKER_JOIN_TIMEOUT", 0.01)
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_launch(*_args):
+            entered.set()
+            release.wait(30)
+            return ProcessIdentity(1001, 10.0)
+
+        monkeypatch.setattr(pm, "launch_process", slow_launch)
+        runtime.start()
+        threading.Thread(
+            target=runtime.submit_command, args=(StartCommand(),), daemon=True
+        ).start()
+        assert entered.wait(2)
+
+        closer = threading.Thread(target=runtime.close, daemon=True)
+        closer.start()
+        try:
+            time.sleep(0.2)
+            # The launch is still running, so close must not have returned.
+            assert closer.is_alive()
+        finally:
+            release.set()
+
+        closer.join(5)
+        assert not closer.is_alive()
+        assert not runtime._threads["palworld-process"].is_alive()
