@@ -142,6 +142,20 @@ def events_of(env, event_type):
 
 
 class TestSupervisor:
+    def test_startup_reconcile_publishes_stopped_for_auto_start(self, env):
+        empty = ProcessSnapshot(tracked=None, tracked_running=False, found=None)
+
+        env.supervisor.handle(ProcessObservation(0, empty))
+
+        stopped = events_of(env, Event.SERVER_STOPPED)
+        assert len(stopped) == 1
+        assert stopped[0]["state"] == LifecycleState.STOPPED
+        assert stopped[0]["pid"] is None
+
+        # Reconciliation happens once, not on every empty scan.
+        env.supervisor.handle(ProcessObservation(0, empty))
+        assert len(events_of(env, Event.SERVER_STOPPED)) == 1
+
     def test_start_command_returns_launch_request(self, env):
         command = StartCommand()
         requests = env.supervisor.handle(command)

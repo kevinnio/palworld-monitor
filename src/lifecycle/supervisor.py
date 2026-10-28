@@ -420,14 +420,28 @@ class Supervisor:
         self.bus.publish(Event.SERVER_STATUS, payload)
 
     def _reconcile_stopped(self):
-        """Make the persisted roster consistent with a stopped server."""
+        """Make the persisted roster consistent with a stopped server.
+
+        Runs once at startup and re-arms auto-start: a server that exits between
+        the startup scan and the first adoption would otherwise leave the game
+        port unbound, because no SERVER_STOPPED would ever be committed.
+        """
         with self._state_lock:
             if self._state != LifecycleState.STOPPED or self._stopped_reconciled:
                 return
             self.player_manager.mark_all_offline()
             self._stopped_reconciled = True
             generation = self._generation
-        self._publish_status(LifecycleState.STOPPED, generation)
+            revision = self._bump_revision_locked()
+        self.bus.publish(
+            Event.SERVER_STOPPED,
+            {
+                "revision": revision,
+                "pid": None,
+                "generation": generation,
+                "state": LifecycleState.STOPPED,
+            },
+        )
 
     def _commit_started(self, identity: ProcessIdentity):
         with self._state_lock:
