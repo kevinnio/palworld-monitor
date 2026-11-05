@@ -64,11 +64,27 @@ port 8212 is already in use.
 
 ## Configuration
 
-After first run, a `settings.yaml` file is saved next to the app.  You can edit
-it to change ports, polling rate, auto-stop delay, etc.
+After first run, a `settings.yaml` file is saved next to the app — the folder
+holding `palworld-monitor.exe`, the project root when running from source. You
+can edit it to change ports, polling rate, auto-stop delay, etc.
+
+`--app-dir PATH` (or `PALWORLD_MONITOR_APP_DIR`) moves that whole app folder
+when you want the app and its data somewhere else — a LinuxGSM instance folder,
+a data partition. `settings.yaml`, logs, player data and pid files all live
+there; the session key is written next to `settings.yaml`, so with `--settings`
+it follows that file. If you keep the app folder inside the repository, add it
+to `.gitignore` yourself.
+
+`banlist.txt` is the game server's own file: the monitor finds it from
+`palserver.exePath`, at `Pal/Saved/SaveGames/banlist.txt` for a native install
+and under `serverfiles/` for LinuxGSM.
+
+Upgrading from an older version with your `settings.yaml` in `src/`? The app
+keeps reading it and prints where to move it.
 
 | Setting (YAML) | CLI flag | Description |
 |-----------------|----------|-------------|
+| — | `--app-dir PATH` | Folder the app keeps its files in (default: next to the app) |
 | — | `--settings PATH` | Path to an alternate `settings.yaml` |
 | `palserver.exePath` ⚑ | `--exe-path PATH` | Full path to PalServer executable (or, with LGSM, the LGSM instance script) |
 | `palserver.adminPassword` ⚑ | `--admin-password PASS` | Admin password from your server's `PalWorldSettings.ini` |
@@ -118,6 +134,11 @@ Requirements:
   server process).
 - The LGSM script must be executable and reachable at the configured path.
 
+LGSM keeps an instance's files together, so point the monitor at it: run it
+with `--app-dir /home/gameserver/pwserver` and its settings, logs, player data,
+and pid files all live with that instance. LGSM's own `log/` folder is
+untouched.
+
 ## Running as a service (Linux)
 
 To have `palworld-monitor` survive reboots and restart on crashes, run it
@@ -126,7 +147,10 @@ under systemd rather than in a terminal. An example unit is provided at
 
 Before installing it, run `palworld-monitor` manually once and complete the
 interactive first-run setup — `settings.yaml` must already exist, since
-systemd has no terminal for the setup wizard to prompt on.
+systemd has no terminal for the setup wizard to prompt on. Run the binary you
+are about to install (the one in `dist/`, in the default layout) so its
+`settings.yaml` lands in that binary's app folder; if you keep the settings
+elsewhere, pass `--settings` or `--app-dir` in `ExecStart` instead.
 
 ```bash
 sudo cp deploy/palworld-monitor.service /etc/systemd/system/
@@ -139,12 +163,16 @@ journalctl -u palworld-monitor -f   # follow logs
 `User` must be the same Linux user that owns your PalServer/LGSM
 installation (same requirement as [LGSM support](#linuxgsm-lgsm-support)
 above) — the process needs permission to launch and signal the game
-server. `WorkingDirectory` matters too: `app.log`, `data/players.json`,
-`banlist.txt`, the `.pid` files, and `session_secret.key` are all written
-relative to it, not to wherever the binary itself lives.
+server. The app's own files (`settings.yaml`, logs, `data/players.json`, the
+`.pid` files, `session_secret.key`) live in its app folder, which is the
+folder holding the binary unless you pass `--app-dir`, so `WorkingDirectory`
+no longer decides where they land. Add `--app-dir /home/gameserver/pwserver`
+to `ExecStart` to keep them with an LGSM instance. `banlist.txt` is the
+server's own file, found from `palserver.exePath` (see
+[Configuration](#configuration)), and is read and written there.
 
-The dashboard reads PalServer's `Pal/Saved/SaveGames/banlist.txt`, including
-native `steam_id,player_uid` entries. Ban and unban require the server's REST API
+The dashboard reads PalServer's `banlist.txt`, including native
+`steam_id,player_uid` entries. Ban and unban require the server's REST API
 to be available. Keep the banlist writable by the account running the monitor.
 
 ## Manual PalServer setup (optional)

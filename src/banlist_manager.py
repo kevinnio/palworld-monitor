@@ -32,28 +32,35 @@ class BanlistManager:
             if not server_exe_path:
                 return None
             server_dir = os.path.dirname(os.path.abspath(server_exe_path))
+            # LGSM keeps the game files in `serverfiles/` next to its script.
             possible_paths = [
-                os.path.join(server_dir, "banlist.txt"),
                 os.path.join(server_dir, "Pal", "Saved", "SaveGames", "banlist.txt"),
+                os.path.join(
+                    server_dir, "serverfiles", "Pal", "Saved", "SaveGames", "banlist.txt"
+                ),
                 os.path.join(
                     server_dir, "Pal", "Saved", "SaveGames", "0", "banlist.txt"
                 ),
                 os.path.join(server_dir, "Pal", "Saved", "banlist.txt"),
+                os.path.join(server_dir, "banlist.txt"),
             ]
             root = server_dir
             for _ in range(4):
-                if os.path.isdir(os.path.join(root, "Pal", "Binaries")):
-                    native_path = os.path.join(
-                        root, "Pal", "Saved", "SaveGames", "banlist.txt"
-                    )
-                    return native_path
+                for base in (root, os.path.join(root, "serverfiles")):
+                    if os.path.isdir(os.path.join(base, "Pal", "Binaries")):
+                        native_path = os.path.join(
+                            base, "Pal", "Saved", "SaveGames", "banlist.txt"
+                        )
+                        return native_path
 
                 root = os.path.dirname(root)
 
             for path in possible_paths:
                 if os.path.exists(path):
                     return path
-            default_path = possible_paths[0]
+            # Nothing found: keep the old default, a `banlist.txt` next to the
+            # executable, so an unrecognized layout behaves as it always did.
+            default_path = os.path.join(server_dir, "banlist.txt")
             logging.debug(f"Using default banlist path: {default_path}")
             return default_path
         except Exception:

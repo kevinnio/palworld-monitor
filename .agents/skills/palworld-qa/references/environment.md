@@ -34,8 +34,11 @@ Otherwise discovery may adopt an old dummy and invalidate the results.
 
 ## Temp settings
 
-Create a temp directory and a settings file there. Resolve absolute paths and
-avoid spaces in paths because the launcher splits `exeArguments` on whitespace.
+Create a temp directory and a settings file there, and pass that directory as
+`--app-dir` when starting the app. Everything the app owns — `settings.yaml`,
+`logs/`, `data/players.json`, the pid files, the session key — then lives in
+that one folder instead of the project root. Resolve absolute paths and avoid
+spaces in paths because the launcher splits `exeArguments` on whitespace.
 
 ```yaml
 palserver:
@@ -89,21 +92,20 @@ Variants:
   adopt it, and wait past the 30 s startup guard + delay.
 - **Live server (non-destructive)**: point at the real server's REST port and
   keep `autoStart`/`autoStop` false so QA cannot stop it. Use a throwaway web
-  password and run the monitor from a temp working directory. Only run
-  scenarios that leave the server running: login, status, invalid login,
-  logout, already-running start guard, banned-ID display, ban/unban of an
-  agreed synthetic ID, and E17–E20. Never run start/stop, crash, auto-stop,
-  REST-unavailable, or server-restart scenarios against a live server. Stop the
-  owned monitor afterward and leave the server running.
+  password and run the monitor with `--app-dir <temp>` so its files stay out of
+  the project. Only run scenarios that leave the server running: login, status,
+  invalid login, logout, already-running start guard, banned-ID display,
+  ban/unban of an agreed synthetic ID, and E17–E20. Never run start/stop, crash,
+  auto-stop, REST-unavailable, or server-restart scenarios against a live
+  server. Stop the owned monitor afterward and leave the server running.
 
 ## Start the app
 
 Windows:
 
 ```powershell
-$env:PALWORLD_MONITOR_SETTINGS = "<temp>/settings.yaml"
 $app = Start-Process -FilePath "<project>\.venv\Scripts\python.exe" `
-  -ArgumentList "-m","src.main" -WorkingDirectory "<project>" `
+  -ArgumentList "-m","src.main","--app-dir","<temp>" -WorkingDirectory "<project>" `
   -WindowStyle Hidden -PassThru
 $app.Id
 ```
@@ -111,8 +113,7 @@ $app.Id
 Linux/macOS:
 
 ```bash
-PALWORLD_MONITOR_SETTINGS=<temp>/settings.yaml \
-  .venv/bin/python -m src.main &
+.venv/bin/python -m src.main --app-dir <temp> &
 echo $!
 ```
 
@@ -209,15 +210,14 @@ remaining = [p.pid for p in psutil.process_iter() if is_dummy(p)]
 assert not remaining, f"Dummy servers still running: {remaining}"
 ```
 
-Then remove only QA artifacts created by this run. Prefer running from a temp
-working directory so existing project data never needs to be overwritten:
+Then remove only QA artifacts created by this run. With `--app-dir <temp>`
+they are all inside that temp folder, so deleting it is enough:
 
-- `data/players.json` (and `data/` if empty)
-- `.venv/Scripts/banlist.txt` (or the configured banlist path)
-- `app.log`
-- stale PID files: `palworld_server.win.pid`, `palworld_server.linux.pid`,
-  `palworld_server.lgsm.pid`
-- the temp settings directory
+- the temp app folder: `settings.yaml`, `logs/`, `data/players.json`,
+  `session_secret.key`, and stale pid files (`palworld_server.win.pid`,
+  `palworld_server.linux.pid`, `palworld_server.lgsm.pid`)
+- `.venv/Scripts/banlist.txt` (or the configured banlist path) — the dummy's
+  own file, not the monitor's
 
 Close the browser tab you opened. Do not run `uv run poe smoke` or any e2e suite
 unless the user explicitly asks.
