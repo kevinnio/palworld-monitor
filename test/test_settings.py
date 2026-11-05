@@ -11,7 +11,7 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.settings import Settings
+from src.settings import DEFAULT_LOG_SETTINGS, Settings, parse_size
 from contextlib import contextmanager
 
 
@@ -428,3 +428,146 @@ class TestSettings:
                 settings.validate_settings()
         finally:
             os.unlink(temp_path)
+
+    def test_default_log_settings_bound_disk_usage(self):
+        """Test that log defaults are append-and-rotate with bounded count and age."""
+        settings = Settings()
+
+        assert settings.logDir is None  # defaults to a logs folder next to the app
+        assert settings.logRotate is True
+        assert settings.logCompress is True
+        assert settings.logBackupCount == 10
+        assert settings.logRetentionDays == 30
+        assert parse_size(settings.logMaxSize) >= 1024 * 1024
+
+    def test_validate_settings_accepts_defaults_without_logging_section(self):
+        """Test that a settings file with no logging section validates and keeps defaults."""
+        settings = Settings()
+
+        with self._temp_server_exe() as server_exe_path:
+            test_settings = {
+                "palserver": {"exePath": server_exe_path, "adminPassword": "admin123"},
+                "web": {"password": "webpass123"},
+            }
+
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".yaml", delete=False
+            ) as f:
+                yaml.safe_dump(test_settings, f)
+                temp_path = f.name
+
+            try:
+                settings.readSettings(temp_path)
+                settings.validate_settings()
+                assert parse_size(settings.logMaxSize) == 5 * 1024 * 1024
+                assert settings.logBackupCount == 10
+            finally:
+                os.unlink(temp_path)
+
+    def test_validate_settings_rejects_undersized_log_files(self):
+        """Test that validation rejects a log file size that would rotate on every line."""
+        settings = Settings()
+        settings["logMaxSize"] = 12
+
+        with pytest.raises(ValueError, match="logMaxSize"):
+            settings.validate_settings()
+
+    def test_validate_settings_rejects_non_numeric_log_sizes(self):
+        """Test that validation rejects a log file size that is not a size."""
+        settings = Settings()
+        settings["logMaxSize"] = "five megabytes"
+
+        with pytest.raises(ValueError, match="logMaxSize"):
+            settings.validate_settings()
+
+    def test_validate_settings_rejects_negative_log_counts(self):
+        """Test that validation rejects negative backup count and retention days."""
+        settings = Settings()
+        settings["logBackupCount"] = -1
+        settings["logRetentionDays"] = -5
+
+        with pytest.raises(ValueError, match="logBackupCount"):
+            settings.validate_settings()
+
+        settings = Settings()
+        settings["logRetentionDays"] = -5
+        with pytest.raises(ValueError, match="logRetentionDays"):
+            settings.validate_settings()
+
+    def test_validate_settings_rejects_empty_log_dir(self):
+        """Test that validation rejects an empty log directory instead of guessing one."""
+        settings = Settings()
+        settings["logDir"] = "   "
+
+        with pytest.raises(ValueError, match="logDir"):
+            settings.validate_settings()
+
+    def test_validate_settings_rejects_log_dir_that_is_a_file(self):
+        """Test that validation rejects a log directory pointing at an existing file."""
+        settings = Settings()
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
+            f.write("I am a file, not a folder")
+            not_a_dir = f.name
+
+        try:
+            settings["logDir"] = not_a_dir
+            with pytest.raises(ValueError, match="logDir is not a directory"):
+                settings.validate_settings()
+        finally:
+            os.unlink(not_a_dir)
+
+
+class TestParseSize:
+    """Tests for the friendly size syntax accepted by log settings."""
+
+    def test_parses_friendly_sizes(self):
+        assert parse_size("5 MB") == 5 * 1024 * 1024
+        assert parse_size("5mb") == 5 * 1024 * 1024
+        assert parse_size("512 KB") == 512 * 1024
+        assert parse_size("1.5 GB") == int(1.5 * 1024**3)
+        assert parse_size("900B") == 900
+
+    def test_parses_plain_byte_counts(self):
+        assert parse_size(5 * 1024 * 1024) == 5 * 1024 * 1024
+        assert parse_size("5242880") == 5 * 1024 * 1024
+        assert parse_size("5_242_880") == 5 * 1024 * 1024
+
+    def test_rejects_values_that_are_not_sizes(self):
+        values = [
+            "five megabytes",
+            "",
+            "   ",
+            "5 TB",
+            "5 M B.",
+            "5,5 MB",
+            "５ MB",  # fullwidth digits are not sizes
+            True,
+            None,
+        ]
+        for value in values:
+            with pytest.raises(ValueError):
+                parse_size(value)
+
+    def test_zero_is_a_size_and_negative_numbers_are_not(self):
+        # 0 parses, and validation rejects it with a message; a negative size is
+        # never meaningful, in a number or in text.
+        assert parse_size("0") == 0
+        assert parse_size(0) == 0
+        assert parse_size("1.5 GB") == int(1.5 * 1024**3)
+        for value in [-1, "-1"]:
+            with pytest.raises(ValueError):
+                parse_size(value)
+
+    def test_rejects_sizes_that_are_not_whole_bytes(self):
+        with pytest.raises(ValueError):
+            parse_size("0.5 B")
+
+    def test_numeric_sizes_must_be_whole_and_finite(self):
+        assert parse_size(5) == 5
+        for value in [1.9, float("inf"), float("nan")]:
+            with pytest.raises(ValueError):
+                parse_size(value)
+
+    def test_the_shipped_default_is_five_megabytes(self):
+        assert parse_size(DEFAULT_LOG_SETTINGS["logMaxSize"]) == 5 * 1024 * 1024

@@ -75,6 +75,12 @@ def build_parser():
         help="Disable auto-stop when server is empty",
     )
 
+    # Logging
+    parser.add_argument(
+        "--log-dir", dest="logDir", metavar="PATH",
+        help="Folder for log files (default: logs/ inside the app folder)",
+    )
+
     return parser
 
 

@@ -76,3 +76,39 @@ security:
   rateLimitRequests: 100
   # Rate limit window in seconds
   rateLimitWindow: 60
+
+# ============================================================================
+# Logging
+# ============================================================================
+# The defaults keep an unattended run bounded: the active log file is capped,
+# rotated backups are gzipped, and both their count and age are limited. The
+# log file is appended to, never truncated, so history survives restarts.
+logging:
+  # Folder for log files (palworld-monitor.log plus palworld-monitor.log.1.gz,
+  # .2.gz, ...).
+  # Default: a "logs" folder inside the app folder — the folder holding the exe
+  # in a release, the project root when running from source, moved by --app-dir
+  # or PALWORLD_MONITOR_APP_DIR. The app folder is not a setting: it is where
+  # this file itself is found, unless --settings points somewhere else.
+  dir: null
+  # Size of one log file before it is rotated: bytes, or a size like "5 MB",
+  # "500 KB", "1.5 GB" ("5_000_000" and a plain byte count also work).
+  # Anything below 1 KB is rejected: it would rotate on almost every line.
+  maxSize: "5 MB"
+  # Number of rotated files to keep (0-1000). Set to 0 to keep only the active
+  # file: it starts over at maxSize and the older history is dropped.
+  backupCount: 10
+  # Rotate the log file by size (true or false). With false the file grows
+  # without a cap, which is only a reasonable choice for a short-lived run.
+  rotate: true
+  # Gzip rotated files (palworld-monitor.log.1.gz), true or false. With false
+  # they stay plain text.
+  compress: true
+  # Delete rotated files whose last write is older than this many days
+  # (0-3650). 0 = keep every rotated file the backupCount allows. Old files are
+  # swept at startup, after each rotation, and hourly in between.
+  retentionDays: 30
+
+# Log level is set with the LOG_LEVEL environment variable (DEBUG, INFO,
+# WARNING, ERROR); the default is INFO. The console gets the same log records
+# as the file.
