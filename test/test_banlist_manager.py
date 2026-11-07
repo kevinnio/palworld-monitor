@@ -38,6 +38,29 @@ class TestBanlistManager:
         assert manager.banlist_path == str(native)
         assert manager.get_banned_players() == (["steam_123"] if exists else [])
 
+    def test_detects_lgsm_banlist_under_serverfiles(self, tmp_path, mock_settings):
+        serverfiles = tmp_path / "serverfiles/Pal/Binaries/Linux"
+        serverfiles.mkdir(parents=True)
+        mock_settings.palworldServerExePath = str(tmp_path / "pwserver")
+
+        manager = BanlistManager(EventBus())
+
+        assert manager.banlist_path == str(
+            tmp_path / "serverfiles/Pal/Saved/SaveGames/banlist.txt"
+        )
+
+    def test_default_banlist_is_next_to_the_server_when_nothing_is_found(
+        self, tmp_path, mock_settings, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        mock_settings.palworldServerExePath = "python"
+
+        manager = BanlistManager(EventBus())
+
+        # The e2e dummy and any unrecognized layout rely on this: no Pal tree,
+        # so the banlist stays a plain banlist.txt next to the executable.
+        assert manager.banlist_path == str(tmp_path / "banlist.txt")
+
     def test_native_pairs_are_unique_ids(self, tmp_path):
         path = tmp_path / "banlist.txt"
         path.write_text("# Bans\nsteam_123,UID123\nsteam_123\n steam_456,UID456\n")

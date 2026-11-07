@@ -14,6 +14,11 @@ def build_parser():
         description="Palworld dedicated server monitor with auto start/stop and web admin."
     )
     parser.add_argument("--settings", metavar="PATH", help="Path to settings.yaml")
+    parser.add_argument(
+        "--app-dir", dest="appDir", metavar="PATH",
+        help="Folder the app keeps its files in: settings.yaml, logs, player data "
+        "(default: the folder holding the exe, the project root from source)",
+    )
 
     # Palworld server
     parser.add_argument(
@@ -81,13 +86,15 @@ def parse_args(argv=None):
 def apply_overrides(args, settings=None):
     """Apply non-None CLI args as settings overrides.
 
-    *settings* defaults to the global settings singleton.
+    `settings` and `appDir` are where the app finds its files, not settings
+    values, so they are not applied. *settings* defaults to the global settings
+    singleton.
     """
     if settings is None:
         settings = _settings
 
     for key, value in vars(args).items():
-        if value is not None and key != "settings":
+        if value is not None and key not in ("settings", "appDir"):
             settings[key] = value
             display = "***" if key in _sensitive else repr(value)
             logging.info(f"CLI override: {key}={display}")

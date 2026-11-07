@@ -1,9 +1,11 @@
 # Copyright (c) 2024 Nomomo
 # Copyright (c) 2024 Kevin Perez - Modified work
 
+import contextlib
 import logging
 import os
 import sys
+from dataclasses import dataclass
 
 from src.cli import parse_args, apply_overrides
 from src.banlist_manager import BanlistManager
@@ -21,13 +23,103 @@ from src.web_server import WebServer
 from src.auto_start import AutoStartManager
 
 
-def _determine_settings_path(args):
-    """Return the path to settings.yaml, accounting for frozen mode and CLI."""
+SETTINGS_FILE_NAME = "settings.yaml"
+APP_DIR_ENV = "PALWORLD_MONITOR_APP_DIR"
+SETTINGS_ENV = "PALWORLD_MONITOR_SETTINGS"
+
+
+def _absolute(path):
+    """Resolve a user-supplied path: `~` expanded, relative to the current folder.
+
+    Returns None for an unset or blank value, so callers keep their own defaults.
+    """
+    if not path:
+        return None
+    text = str(path).strip()
+    if not text:
+        return None
+    return os.path.abspath(os.path.expanduser(text))
+
+
+def resolve_app_dir(cli_app_dir=None):
+    """The folder the app owns: its settings, logs, player data, and pid files.
+
+    Defaults to the folder holding the exe in a release and the project root
+    when running from source — `src/` is source code, and a user's settings file
+    is not, so it sits with the app in both layouts. `--app-dir` and the
+    PALWORLD_MONITOR_APP_DIR environment move it for hosts that keep the app
+    and its data apart (a LinuxGSM instance folder, a data partition).
+    """
+    configured = _absolute(cli_app_dir) or _absolute(os.environ.get(APP_DIR_ENV))
+    if configured:
+        return configured
     if getattr(sys, "frozen", False):
-        default = os.path.join(os.path.dirname(sys.executable), "settings.yaml")
-    else:
-        default = os.path.join(os.path.dirname(__file__), "settings.yaml")
-    return args.settings or os.environ.get("PALWORLD_MONITOR_SETTINGS", default)
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def enter_app_dir(app_dir):
+    """Create the app folder, move the process into it, and check it is writable.
+
+    The app's own files are written by relative path, so one `chdir` at startup
+    is what makes "everything lives in the app folder" true for all of them. A
+    folder that exists but is read-only would start with console-only logs and
+    silently failed player saves, so it is rejected here instead.
+    """
+    os.makedirs(app_dir, exist_ok=True)
+    os.chdir(app_dir)
+    _ensure_writable(app_dir)
+
+
+def _ensure_writable(app_dir):
+    """Raise `OSError` when the app cannot create files in *app_dir*."""
+    probe = os.path.join(app_dir, f".write-test-{os.getpid()}")
+    try:
+        with open(probe, "w", encoding="utf-8"):
+            pass
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(probe)
+
+
+def _determine_settings_path(explicit_settings, app_dir):
+    """Return `(settings_path, note)` for the settings file: `settings.yaml` in the app folder.
+
+    `--settings` and PALWORLD_MONITOR_SETTINGS override it, already resolved by
+    `resolve_startup_paths`. A settings file left in `src/` by an older install
+    is still read, and *note* then tells the user to move it, so the app never
+    silently starts with defaults.
+    """
+    if explicit_settings:
+        return explicit_settings, None
+
+    settings_path = os.path.join(app_dir, SETTINGS_FILE_NAME)
+    legacy = os.path.abspath(os.path.join(os.path.dirname(__file__), SETTINGS_FILE_NAME))
+    missing = not os.path.exists(settings_path)
+    if legacy != os.path.abspath(settings_path) and missing and os.path.exists(legacy):
+        return legacy, f"Reading {legacy}; move it to {settings_path} and restart."
+    return settings_path, None
+
+
+@dataclass(frozen=True)
+class StartupPaths:
+    """The paths a run needs before anything else: app folder and settings."""
+
+    app_dir: str
+    settings_path: str | None
+
+
+def resolve_startup_paths(args):
+    """Resolve the path flags while the process is still where the user typed them.
+
+    Relative paths belong to the shell that ran the app, so they are resolved
+    once here, before `enter_app_dir` moves the process into the app folder.
+    """
+    return StartupPaths(
+        app_dir=resolve_app_dir(_absolute(args.appDir)),
+        settings_path=_absolute(args.settings)
+        or _absolute(os.environ.get(SETTINGS_ENV)),
+    )
 
 
 def main():
@@ -50,20 +142,33 @@ def main():
         flush=True,
     )
 
-    log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
-    log_level = getattr(logging, log_level_name, logging.INFO)
+    paths = resolve_startup_paths(args)
+    try:
+        enter_app_dir(paths.app_dir)
+    except OSError as exc:
+        print(f"error: cannot use the app folder {paths.app_dir}: {exc}")
+        print("point --app-dir at a folder you can write to, then restart.")
+        sys.exit(1)
+
+    log_level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
 
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler("app.log", mode="w"),
+            logging.FileHandler(
+                os.path.join(paths.app_dir, "app.log"), mode="w"
+            ),
         ],
     )
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
-    settings_path = _determine_settings_path(args)
+    settings_path, settings_note = _determine_settings_path(
+        paths.settings_path, paths.app_dir
+    )
+    if settings_note:
+        logging.warning(settings_note)
 
     # First run: no settings file → interactive setup
     if not os.path.exists(settings_path):

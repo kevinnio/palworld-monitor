@@ -4,6 +4,9 @@
 #   - You've already run palworld-monitor manually once and completed the
 #     interactive first-run setup (settings.yaml must already exist --
 #     systemd has no terminal for the setup wizard to prompt on).
+#     Run the binary you are about to install (the one in dist/ below), so its
+#     settings.yaml lands in the same app folder systemd will use. If you keep
+#     settings elsewhere, add --settings PATH (or --app-dir PATH) to ExecStart.
 #
 # Install:
 #   1. Copy this file to /etc/systemd/system/palworld-monitor.service
@@ -23,8 +26,10 @@ Type=simple
 # Must be the same user that owns your PalServer / LGSM install -- this
 # process needs permission to launch/signal the game server process.
 User=<your-lgsm-user>
-# app.log, data/players.json, banlist.txt, the .pid files, and
-# session_secret.key are all written relative to this directory.
+# The app keeps its own files (settings.yaml, logs/, data/players.json, the
+# .pid files, session_secret.key) in its app folder: the folder holding this
+# binary. Add --app-dir to ExecStart to keep them somewhere else, e.g. an LGSM
+# instance folder.
 # Default below assumes the repo was cloned to ~<your-lgsm-user>/palworld-monitor
 # and built with `uv run poe build-exe` (which outputs to dist/) -- adjust if yours differs.
 WorkingDirectory=/home/<your-lgsm-user>/palworld-monitor/dist
