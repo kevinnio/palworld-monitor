@@ -5,6 +5,7 @@ Tests for the BanlistManager module.
 import pytest
 import sys
 import os
+import logging
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -312,6 +313,93 @@ class TestBanlistManager:
             assert "SteamID1" in written_ids
         finally:
             cleanup_temp_file(temp_file)
+
+    def test_access_warnings_writable_file(self, tmp_path):
+        path = tmp_path / "banlist.txt"
+        path.write_text("steam_123,UID123\n")
+
+        manager = BanlistManager(EventBus(), str(path))
+
+        assert manager.access_warnings() == []
+
+    def test_access_warnings_missing_file_in_writable_dir(self, tmp_path):
+        manager = BanlistManager(EventBus(), str(tmp_path / "banlist.txt"))
+
+        assert manager.access_warnings() == []
+
+    def test_access_warnings_missing_parent_dir_below_writable_dir(self, tmp_path):
+        manager = BanlistManager(
+            EventBus(), str(tmp_path / "missing" / "dir" / "banlist.txt")
+        )
+
+        assert manager.access_warnings() == []
+
+    def test_access_warnings_unreadable_file(self, tmp_path, monkeypatch):
+        path = tmp_path / "banlist.txt"
+        path.write_text("")
+        monkeypatch.setattr(
+            BanlistManager, "_is_readable", staticmethod(lambda _path: False)
+        )
+
+        warnings = BanlistManager(EventBus(), str(path)).access_warnings()
+
+        assert len(warnings) == 1
+        assert "Cannot read" in warnings[0]
+
+    def test_access_warnings_unwritable_file(self, tmp_path, monkeypatch):
+        path = tmp_path / "banlist.txt"
+        path.write_text("")
+        monkeypatch.setattr(
+            BanlistManager, "_is_writable", staticmethod(lambda _path: False)
+        )
+
+        warnings = BanlistManager(EventBus(), str(path)).access_warnings()
+
+        assert len(warnings) == 1
+        assert "Cannot write" in warnings[0]
+        import getpass
+
+        assert f"running as user '{getpass.getuser()}'" in warnings[0]
+
+    def test_access_warnings_no_banlist_path(self, mock_settings):
+        mock_settings.palworldServerExePath = None
+
+        warnings = BanlistManager(EventBus()).access_warnings()
+
+        assert len(warnings) == 1
+        assert "not found" in warnings[0]
+
+    @pytest.mark.parametrize(
+        "web_enabled, player_tracking",
+        [(False, True), (True, False)],
+    )
+    def test_startup_warning_skipped_when_feature_disabled(
+        self, tmp_path, mock_settings, monkeypatch, caplog, web_enabled, player_tracking
+    ):
+        mock_settings.useWebServer = web_enabled
+        mock_settings.enablePlayerTracking = player_tracking
+        monkeypatch.setattr(
+            BanlistManager, "access_warnings", lambda _self: ["banlist problem"]
+        )
+
+        with caplog.at_level(logging.WARNING):
+            BanlistManager(EventBus(), str(tmp_path / "banlist.txt"))
+
+        assert "banlist problem" not in caplog.text
+
+    def test_startup_warning_logged_when_features_enabled(
+        self, tmp_path, mock_settings, monkeypatch, caplog
+    ):
+        mock_settings.useWebServer = True
+        mock_settings.enablePlayerTracking = True
+        monkeypatch.setattr(
+            BanlistManager, "access_warnings", lambda _self: ["banlist problem"]
+        )
+
+        with caplog.at_level(logging.WARNING):
+            BanlistManager(EventBus(), str(tmp_path / "banlist.txt"))
+
+        assert "banlist problem" in caplog.text
 
     def test_banlist_ignores_comments(self):
         """Test that banlist reading ignores comment lines."""

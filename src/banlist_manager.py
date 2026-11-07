@@ -3,6 +3,7 @@ import os
 import logging
 import threading
 import tempfile
+import getpass
 from src.settings import settings
 from src.events import EventBus, Event
 
@@ -20,6 +21,14 @@ class BanlistManager:
         self.banlist_path = banlist_path or self._detect_banlist_path()
         self._lock = threading.RLock()
         self.bus = bus
+        self._warn_if_unusable()
+
+    def _warn_if_unusable(self):
+        """Log access problems when the player-tracking dashboard is enabled."""
+        if not settings.useWebServer or not settings.enablePlayerTracking:
+            return
+        for warning in self.access_warnings():
+            logging.warning(warning)
 
     def _detect_banlist_path(self):
         """Detect the banlist.txt file path based on server executable path.
@@ -73,6 +82,73 @@ class BanlistManager:
 
         with open(self.banlist_path, "r", encoding="utf-8") as file:
             return file.readlines()
+
+    @staticmethod
+    def _is_readable(path):
+        """Return True when an existing banlist can be read."""
+        try:
+            with open(path, "rb"):
+                return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+
+    @staticmethod
+    def _is_writable(path):
+        """Return True when bans can be appended and the file replaced."""
+        if os.path.exists(path):
+            try:
+                with open(path, "ab"):
+                    pass
+            except OSError:
+                return False
+
+        # Unbanning replaces the file, so the containing directory must be writable.
+        directory = os.path.dirname(os.path.abspath(path))
+        while directory and not os.path.isdir(directory):
+            parent = os.path.dirname(directory)
+            if parent == directory:
+                return False
+            directory = parent
+
+        try:
+            with tempfile.NamedTemporaryFile(dir=directory):
+                return True
+        except OSError:
+            return False
+
+    @staticmethod
+    def _current_user():
+        """Return the account running the monitor, or 'unknown' if unavailable."""
+        try:
+            return getpass.getuser()
+        except Exception:
+            return "unknown"
+
+    def access_warnings(self) -> List[str]:
+        """Return startup warnings for a banlist that cannot be read or written."""
+        user = self._current_user()
+        if not self.banlist_path:
+            return [
+                f"PalServer banlist not found (running as user '{user}'): banned "
+                "players will not be shown and ban/unban from the dashboard will fail."
+            ]
+
+        path = self.banlist_path
+        warnings = []
+        if not self._is_readable(path):
+            warnings.append(
+                f"Cannot read the PalServer banlist at {path} (running as user "
+                f"'{user}'): banned players will not be shown in the dashboard."
+            )
+        if not self._is_writable(path):
+            warnings.append(
+                f"Cannot write the PalServer banlist at {path} (running as user "
+                f"'{user}'): ban and unban from the dashboard will fail. Make it "
+                "writable by that account."
+            )
+        return warnings
 
     @staticmethod
     def _steam_id(line):
