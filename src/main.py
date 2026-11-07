@@ -585,13 +585,9 @@ def main():
         sys.exit(1)
 
     # Client selection
-    if settings.protocol.upper() == "REST":
-        from src.api_clients import RestClient
+    from src.api_clients import RestClient
 
-        client = RestClient()
-    else:
-        logging.error(f"Invalid protocol specified in settings: {settings.protocol}")
-        sys.exit(1)
+    client = RestClient()
 
     bus = EventBus()
     process_manager = create_process_manager()

@@ -7,7 +7,6 @@ palserver:
   host: "127.0.0.1"
   port: 8211
   adminPassword: "palworld123"
-  protocol: "REST"
   restPort: 8212
   rconPort: 25575
 

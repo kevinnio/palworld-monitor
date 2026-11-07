@@ -162,7 +162,6 @@ def _default_config(exe_path, admin_pass, web_pass, use_lgsm=False):
             "port": 8211,
             "adminPassword": admin_pass,
             "useLGSM": use_lgsm,
-            "protocol": "REST",
             "restPort": 8212,
             "pollingRate": 5,
         },

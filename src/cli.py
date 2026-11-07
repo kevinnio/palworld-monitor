@@ -36,10 +36,6 @@ def build_parser():
         help="Palworld game server port",
     )
     parser.add_argument(
-        "--protocol", choices=["REST"], metavar="PROTO",
-        help="Server communication protocol",
-    )
-    parser.add_argument(
         "--polling-rate", dest="pollingRate", type=int, metavar="SEC",
         help="Seconds between status polls",
     )
