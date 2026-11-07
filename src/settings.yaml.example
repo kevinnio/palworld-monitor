@@ -18,8 +18,6 @@ palserver:
   # own `start`/`stop` commands (exePath above must point at that script), so
   # LGSM's own state tracking and `monitor` cron job stay in sync.
   useLGSM: false
-  # Protocol used for server communication
-  protocol: "REST"
   # Port for the REST API
   restPort: 8212
   # How often to reach out to the Palworld server for status and player

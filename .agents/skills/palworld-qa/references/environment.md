@@ -48,7 +48,6 @@ palserver:
   port: 8211
   adminPassword: "palworld123"   # must match test/e2e/dummy/PalServer-Dummy.py
   useLGSM: false
-  protocol: "REST"
   restPort: 8212
   pollingRate: 2
 

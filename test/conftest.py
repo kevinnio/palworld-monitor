@@ -79,7 +79,6 @@ def mock_settings(monkeypatch):
     mock.autoStopDelay = 120
     mock.enablePlayerTracking = True
     mock.pollingRate = 5
-    mock.protocol = "REST"
     mock.controlServerThroughWeb = True
     mock.showServerIPAddress = False
     mock.firstPacketPattern = b"\x09\x08\x00"

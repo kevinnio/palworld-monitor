@@ -41,7 +41,6 @@ class TestSettings:
         assert settings["palworldServerPort"] == 8211
 
         # Test behavior: critical defaults enable server functionality
-        assert settings.protocol == "REST"  # Determines API client type
         assert settings.useWebServer is True  # Enables web interface
         assert settings.autoStart is True  # Enables auto-start feature
         assert settings.autoStop is True  # Enables auto-stop feature
