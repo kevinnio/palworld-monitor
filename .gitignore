@@ -6,6 +6,8 @@
 __pycache__/
 *.pyc
 *.log
+*.log.*
+logs/
 /settings.yaml
 src/settings.yaml
 session_secret.key

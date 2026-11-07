@@ -99,9 +99,28 @@ keeps reading it and prints where to move it.
 | `web.username` | `--web-username USER` | Web admin username |
 | `features.autoStart` | `--no-auto-start` | Disable auto-start on UDP probe |
 | `features.autoStop` | `--no-auto-stop` | Disable auto-stop when server is empty |
+| `logging.dir` | `--log-dir PATH` | Folder for log files (default: `logs/` inside the app folder) |
+| `logging.maxSize` | — | Size of one log file before it rotates (default 5 MB) |
+| `logging.backupCount` | — | Rotated log files to keep (default 10) |
+| `logging.rotate` | — | Turn log rotation off (default `true`) |
+| `logging.compress` | — | Turn backup compression off (default `true`) |
+| `logging.retentionDays` | — | Days of old logs to keep (default 30, `0` keeps them all) |
 
-⚑ = required on first run.  Passwords are masked in logs.  Every setting can be
-overridden via CLI flag (run with `--help`).
+⚑ = required on first run.  Passwords are masked in logs.  Most settings have
+a CLI flag too (run with `--help`); the `logging.*` settings are file-only.
+
+### Logs
+
+The app keeps its logs in a `logs` folder inside its app folder (see
+[Configuration](#configuration)): next to the app itself in a release, the
+project root when running from source. The console shows the same log lines, so
+under systemd `journalctl` works too.
+
+Nothing to maintain: history is kept across restarts, old entries are
+compressed and pruned on their own (at startup, on each rotation, and hourly),
+and the folder stays small even after months unattended. Want more detail?
+Start with `LOG_LEVEL=DEBUG`. The table above covers the knobs if you want to
+keep logs longer, larger, or in a different folder.
 
 ## LinuxGSM (LGSM) support
 

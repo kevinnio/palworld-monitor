@@ -7,7 +7,7 @@ import socket
 
 import yaml
 
-from src.settings import DEFAULT_SECURITY_SETTINGS
+from src.settings import DEFAULT_LOG_SETTINGS, DEFAULT_SECURITY_SETTINGS
 
 
 def auto_detect_palserver():
@@ -183,6 +183,7 @@ def _default_config(exe_path, admin_pass, web_pass, use_lgsm=False):
             "stopDelay": 600,
         },
         "security": dict(DEFAULT_SECURITY_SETTINGS),
+        "logging": dict(DEFAULT_LOG_SETTINGS),
     }
 
 
