@@ -2,48 +2,21 @@
 
 ![CI](https://github.com/kevinnio/palworld-monitor/actions/workflows/ci.yml/badge.svg)
 
-A Python application for managing PalWorld dedicated servers on Windows and Linux. The server automatically starts when players attempt to connect and shuts down when idle, with a web-based admin interface for monitoring and control.
+Manages a PalWorld dedicated server on Windows or Linux: starts it when a player
+connects, stops it when the server is empty, and provides a web dashboard for
+monitoring and control. It must run on the same host as the server (your PC,
+the same VM, the same Docker container, etc.) so it can launch and signal the
+game process.
 
-## Features
-
-- **Cross-platform support**: Windows and Linux compatibility, including servers managed by [LinuxGSM](https://linuxgsm.com/) (LGSM)
-- **Automatic server management**:
-  - Auto-start when players attempt to connect
-  - Auto-stop after configured delay when server is empty (default: 10 minutes)
-  - Supports REST API communication with PalServer
-- **Web-based admin interface**:
-  - Real-time server monitoring
-  - Server control capabilities
-  - Light/dark theme support
-- **Player management**:
-  - Track online/offline players (session-based)
-  - Kick or ban players
-  - Player details: name, Steam ID, level
-  - Unban players from the dashboard, including bans already stored by PalServer
-- **Security**:
-  - Web interface with authentication (username/password login)
-  - CSRF protection and rate limiting
-  - Login attempt lockout after failed attempts
-- **Configurable settings**: YAML-based configuration file
-
-## Limitations
-
-- **Development stage**: This tool is in active development and may contain bugs
-- **Same host requirement**: In order to be able to start/stop the Palworld Server this app must run on the same host as the PalWorld server (your own PC, same AWS EC2 instance, same Docker container, etc).
-
-## Quick Start
+## Setup
 
 1. Download from the latest [GitHub Release](https://github.com/kevinnio/palworld-monitor/releases):
    - **Windows:** `palworld-monitor-windows.exe`
    - **Linux:** `palworld-monitor-linux`
 2. Run it. On first launch it auto-detects your PalServer, enables the REST
-   API in your `PalWorldSettings.ini`, asks for a couple of passwords, and
-   starts.
-3. Open http://localhost:8213 in your browser and log in with the password you
-   chose.
-
-No config files to edit. The monitor auto-starts and auto-stops your PalServer
-as players come and go.
+   API in your `PalWorldSettings.ini`, asks for the server admin password and a
+   web password, and writes `settings.yaml`.
+3. Open http://localhost:8213 in your browser and log in.
 
 ### From source
 
@@ -52,15 +25,11 @@ uv sync             # install deps
 uv run poe start    # same interactive first-run setup
 ```
 
-Run e2e smoke tests with `uv run poe smoke`. **Do not run smoke tests
-while a real PalServer is running** — they kill all PalServer processes
-and occupy game ports to isolate the test environment.
+## Using the dashboard
 
-`uv run poe test` runs unit tests and the integration tests in `test/integration/`.
-Run only integration tests with `uv run poe test test/integration`.
-The Linux-only LGSM tests execute a stand-in script and the dummy server,
-not actual LinuxGSM or Palworld. They skip if a PalServer is running or
-port 8212 is already in use.
+- Watch server state and players: name, Steam ID, level, online/offline.
+- Start or stop the server manually.
+- Kick, ban or unban players, including bans already stored by PalServer.
 
 ## Configuration
 
@@ -75,10 +44,6 @@ there; the session key is written next to `settings.yaml`, so with `--settings`
 it follows that file. If you keep the app folder inside the repository, add it
 to `.gitignore` yourself.
 
-`banlist.txt` is the game server's own file: the monitor finds it from
-`palserver.exePath`, at `Pal/Saved/SaveGames/banlist.txt` for a native install
-and under `serverfiles/` for LinuxGSM.
-
 Upgrading from an older version with your `settings.yaml` in `src/`? The app
 keeps reading it and prints where to move it.
 
@@ -88,17 +53,22 @@ keeps reading it and prints where to move it.
 | — | `--settings PATH` | Path to an alternate `settings.yaml` |
 | `palserver.exePath` ⚑ | `--exe-path PATH` | Full path to PalServer executable (or, with LGSM, the LGSM instance script) |
 | `palserver.adminPassword` ⚑ | `--admin-password PASS` | Admin password from your server's `PalWorldSettings.ini` |
-| `palserver.pollingRate` ⚑ | `--polling-rate SEC` | Seconds between status polls (default `5`) |
-| `palserver.useLGSM` | `--use-lgsm` | Manage the server through a LinuxGSM script instead of launching it directly (Linux only) |
 | `web.password` ⚑ | `--web-password PASS` | Password for the web admin interface |
-| `palserver.host` | `--host HOST` | Palworld server host |
-| `palserver.port` | `--server-port PORT` | Palworld game server port |
-| `palserver.protocol` | `--protocol REST` | Server communication protocol |
+| `palserver.host` | `--host HOST` | Palworld server host (default `127.0.0.1`) |
+| `palserver.port` | `--server-port PORT` | Palworld game server port (default `8211`); also watched for incoming connections |
+| `palserver.restPort` | — | PalServer REST API port (default `8212`) |
+| `palserver.pollingRate` | `--polling-rate SEC` | Seconds between status polls (default `5`) |
+| `palserver.useLGSM` | `--use-lgsm` | Manage the server through a LinuxGSM script (Linux only; see below) |
 | `web.enabled` | `--no-web` | Disable the web admin UI |
-| `web.port` | `--web-port PORT` | Web admin UI port |
-| `web.username` | `--web-username USER` | Web admin username |
-| `features.autoStart` | `--no-auto-start` | Disable auto-start on UDP probe |
-| `features.autoStop` | `--no-auto-stop` | Disable auto-stop when server is empty |
+| `web.port` | `--web-port PORT` | Web admin UI port (default `8213`) |
+| `web.username` | `--web-username USER` | Web admin username (default `admin`) |
+| `web.controlServer` | — | Enable server start/stop controls in the web UI |
+| `web.showServerIP` | — | Show the server IP address in the web UI |
+| `features.autoStart` | `--no-auto-start` | Disable auto-start when a player connects |
+| `features.autoStop` | `--no-auto-stop` | Disable auto-stop when the server is empty |
+| `features.playerTracking` | — | Track online/offline players. Important: for banning to work properly, `Pal/Saved/SaveGames/banlist.txt` must be writable by the account running the monitor |
+| `autoStop.stopDelay` | — | Seconds of an empty server before auto-stop (default `600`) |
+| `security.rateLimitEnabled` | — | Enable request rate limiting |
 | `logging.dir` | `--log-dir PATH` | Folder for log files (default: `logs/` inside the app folder) |
 | `logging.maxSize` | — | Size of one log file before it rotates (default 5 MB) |
 | `logging.backupCount` | — | Rotated log files to keep (default 10) |
@@ -106,8 +76,8 @@ keeps reading it and prints where to move it.
 | `logging.compress` | — | Turn backup compression off (default `true`) |
 | `logging.retentionDays` | — | Days of old logs to keep (default 30, `0` keeps them all) |
 
-⚑ = required on first run.  Passwords are masked in logs.  Most settings have
-a CLI flag too (run with `--help`); the `logging.*` settings are file-only.
+⚑ = required on first run. Passwords are masked in logs. Most settings have a
+CLI flag too (run with `--help`); the `logging.*` settings are file-only.
 
 ### Logs
 
@@ -132,26 +102,15 @@ the LGSM instance script instead of the game binary:
 palserver:
   exePath: "/home/gameserver/pwserver/pwserver"
   useLGSM: true
-  adminPassword: "changeme"
   ...
 ```
 
-(or `--use-lgsm --exe-path /home/gameserver/pwserver/pwserver` on the CLI.)
-
 With `useLGSM` enabled, the monitor calls the LGSM script's own `start` and
-`stop` commands instead of spawning or killing the PalServer process
-directly. This keeps LGSM's own state tracking in sync — including its
-`monitor` cron job, which would otherwise think a monitor-initiated stop was
-a crash and restart the server. Player/auto-stop detection is unaffected
-since it works by scanning OS processes for `PalServer`, regardless of how
-it was launched.
-
-Requirements:
-
-- `palworld-monitor` must run as the same Linux user that owns the LGSM
-  installation (it needs permission to run the script and to see/signal the
-  server process).
-- The LGSM script must be executable and reachable at the configured path.
+`stop` commands instead of spawning or killing the PalServer process directly,
+keeping LGSM's state tracking and `monitor` cron job in sync. Player and
+auto-stop detection still work, since they scan OS processes for `PalServer`.
+Run the monitor as the same Linux user that owns the LGSM installation, and make
+sure the script is executable and reachable at the configured path.
 
 LGSM keeps an instance's files together, so point the monitor at it: run it
 with `--app-dir /home/gameserver/pwserver` and its settings, logs, player data,
@@ -160,9 +119,8 @@ untouched.
 
 ## Running as a service (Linux)
 
-To have `palworld-monitor` survive reboots and restart on crashes, run it
-under systemd rather than in a terminal. An example unit is provided at
-[`deploy/palworld-monitor.service`](deploy/palworld-monitor.service).
+To survive reboots and restart on crashes, run it under systemd. An example unit
+is provided at [`deploy/palworld-monitor.service`](deploy/palworld-monitor.service).
 
 Before installing it, run `palworld-monitor` manually once and complete the
 interactive first-run setup — `settings.yaml` must already exist, since
@@ -180,24 +138,17 @@ journalctl -u palworld-monitor -f   # follow logs
 ```
 
 `User` must be the same Linux user that owns your PalServer/LGSM
-installation (same requirement as [LGSM support](#linuxgsm-lgsm-support)
-above) — the process needs permission to launch and signal the game
+installation — the process needs permission to launch and signal the game
 server. The app's own files (`settings.yaml`, logs, `data/players.json`, the
 `.pid` files, `session_secret.key`) live in its app folder, which is the
 folder holding the binary unless you pass `--app-dir`, so `WorkingDirectory`
 no longer decides where they land. Add `--app-dir /home/gameserver/pwserver`
-to `ExecStart` to keep them with an LGSM instance. `banlist.txt` is the
-server's own file, found from `palserver.exePath` (see
-[Configuration](#configuration)), and is read and written there.
-
-The dashboard reads PalServer's `banlist.txt`, including native
-`steam_id,player_uid` entries. Ban and unban require the server's REST API
-to be available. Keep the banlist writable by the account running the monitor.
+to `ExecStart` to keep them with an LGSM instance.
 
 ## Manual PalServer setup (optional)
 
-The app auto-configures your PalServer on first run.  This section is only
-needed if auto-setup fails, or if you want to configure things yourself.
+The app auto-configures your PalServer on first run. This section is only needed
+if auto-setup fails or you prefer to configure it yourself.
 
 Your PalServer needs the REST API enabled in `PalWorldSettings.ini`:
 
