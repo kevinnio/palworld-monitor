@@ -614,12 +614,28 @@ def main():
             print_web_link(settings.webServerPort)
             web_server = WebServer(palworld_controller, bus=bus)
             web_server.run()
+        else:
+            wait_for_shutdown()
     finally:
         if web_server is not None:
             web_server.close()
         if auto_start_manager is not None:
             auto_start_manager.close()
         palworld_controller.close()
+
+
+def wait_for_shutdown():
+    """Hold the process open with the web UI disabled.
+
+    The lifecycle, detection and auto-start threads are daemons, so returning
+    from `main()` would end the monitor and with it auto-start/auto-stop.
+    """
+    logging.info("Web server disabled; monitoring headless. Press Ctrl+C to stop.")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logging.info("Stopping Palworld Monitor.")
 
 
 if __name__ == "__main__":
