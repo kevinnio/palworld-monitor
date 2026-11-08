@@ -58,9 +58,10 @@ web:
   password: "<choose-a-throwaway-password>"
   controlServer: true
   showServerIP: false
+  # enabled: false runs headless: no dashboard and no login (see below)
 
 features:
-  playerTracking: true
+  playerTracking: true  # false for the tracking-disabled variant
   autoStart: true       # false for direct web-start/auto-stop runs
   autoStop: false       # true for auto-stop/notice runs
 
@@ -89,6 +90,17 @@ Variants:
 - **Auto-stop**: `restPort: 8212`, `autoStart: false`, `autoStop: true`,
   `stopDelay: 5`. Start the dummy with `DUMMY_PLAYER_COUNT=0`, let the monitor
   adopt it, and wait past the 30 s startup guard + delay.
+- **Auto-stop disabled**: `autoStart: false`, `autoStop: false`, `stopDelay: 5`.
+  Start the dummy with `DUMMY_PLAYER_COUNT=0`, let the monitor adopt it, and
+  confirm it stays RUNNING past guard + delay.
+- **Player tracking disabled**: `playerTracking: false`, `autoStart: false`,
+  `autoStop: false`. Start a dummy with players; the dashboard lists none, and
+  bans still work against a seeded `banlist.txt` next to the dummy.
+- **Web disabled**: `web.enabled: false`. There is no dashboard to log into, so
+  verify through `<app-dir>/logs/palworld-monitor.log` and the dummy's REST port
+  8212. Start the app with `autoStart: true` and probe UDP 8211 to prove the
+  headless lifecycle still runs. Point `web.password` at anything: it is not
+  validated when the web server is off.
 - **Live server (non-destructive)**: point at the real server's REST port and
   keep `autoStart`/`autoStop` false so QA cannot stop it. Use a throwaway web
   password and run the monitor with `--app-dir <temp>` so its files stay out of
@@ -215,8 +227,8 @@ they are all inside that temp folder, so deleting it is enough:
 - the temp app folder: `settings.yaml`, `logs/`, `data/players.json`,
   `session_secret.key`, and stale pid files (`palworld_server.win.pid`,
   `palworld_server.linux.pid`, `palworld_server.lgsm.pid`)
-- `.venv/Scripts/banlist.txt` (or the configured banlist path) — the dummy's
-  own file, not the monitor's
+- `.venv/Scripts/banlist.txt` (`.venv/bin/banlist.txt` on Linux/macOS, or the
+  configured banlist path) — the dummy's own file, not the monitor's
 
 Close the browser tab you opened. Do not run `uv run poe smoke` or any e2e suite
 unless the user explicitly asks.

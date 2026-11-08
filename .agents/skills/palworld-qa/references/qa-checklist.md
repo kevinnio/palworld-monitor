@@ -47,6 +47,10 @@ Run the ones matching changed areas, plus at least two unrelated ones.
 | E19 | bans | Rejected and failed moderation | Submit an invalid ID through the page fetch path; cancel a confirmation; make the banlist unwritable | Invalid IDs get HTTP 400 before the API call; cancel sends nothing; storage failure shows a failure alert and keeps visible ban state |
 | E20 | bans/live server | Live PalServer moderation | With a real PalServer running and auto-stop disabled, ban then unban an agreed synthetic ID through the built app | REST returns 200; the native `Pal/Saved/SaveGames/banlist.txt` gains then loses only that ID; pre-existing bans and players are untouched; the server keeps running |
 | E21 | lifecycle | Startup adoption with stale state | Leave a dummy running, plus a PID file naming a dead PID and persisted online players; start the monitor | Adopts the live dummy as RUNNING without launching a second process; stale PID and ghost roster are cleared |
+| E22 | auto-start | Auto-start disabled never binds the game port | Variant `autoStart: false`; with the app STOPPED, confirm nothing listens on UDP 8211; send `09 08 00` to UDP 8211 | No server process starts; state stays STOPPED; the probe fails instead of starting anything; no auto-start listener on 8211 |
+| E23 | auto-stop | Auto-stop disabled keeps an empty server up | Variant `autoStop: false`, `stopDelay: 5`; start a dummy with `DUMMY_PLAYER_COUNT=0`; let the monitor adopt it as RUNNING; wait past the 30 s startup guard + delay + several polls without sending stop | State stays RUNNING; no STOPPING transition; the dummy is still alive; the auto-stop notice stays hidden (H10); stopping it from the dashboard still works |
+| E24 | players | Player tracking disabled | Variant `playerTracking: false`; seed `banlist.txt` next to the dummy; start a dummy reporting players; open `/`; check `/banned`; ban one live ID through the page fetch path | `playerData=ok` but `players` stays empty and `playerCount` is 0 while the server reports players; the only rows are the seeded banlist IDs, shown by Steam ID with Unban; `data/players.json` holds no players; `/banned` lists the seed; the ban succeeds and the banlist gains the ID |
+| E25 | web | Web UI disabled runs headless | Variant `web.enabled: false`, `autoStart: true`; start the app; request `http://localhost:8213/`; send `09 08 00` to UDP 8211; read `<app-dir>/logs/palworld-monitor.log`; stop with Ctrl-C | Port 8213 refuses connections; no "Web admin UI" link and no "Web server start" line, but a "monitoring headless" line appears and the process keeps running; the UDP probe is received and starts the server (log reaches RUNNING); Ctrl-C logs "Stopping Palworld Monitor.", releases the game port and exits without a traceback |
 
 ## Change-sensitive map
 
@@ -57,7 +61,7 @@ When `qa_delta.py` reports an area, update and run the matching scenarios.
 | lifecycle, process control, auto-start/auto-stop | H2–H4, H8–H10, E1–E7, E11–E15 |
 | web server, templates, static JS/CSS | H1–H10, E7, E9 |
 | player/ban managers, REST client | H5–H7, E5, E10, E17–E20 |
-| settings, CLI, setup, main composition | H1–H3, H10, E3, E5, E6 |
+| settings, CLI, setup, main composition | H1–H3, H10, E3, E5, E6, E22–E25 |
 | docs only | no new browser scenario; spot-check the affected instructions |
 
 Run E16 after every QA pass, including failed or interrupted runs.
@@ -78,6 +82,7 @@ integration tests do not replace every visible result in a QA scenario.
 | E3 | Unit packet/listener behavior; E2E sends a real UDP packet and checks process discovery | Dashboard reaches RUNNING and listener releases the game port |
 | E5, E15 | Unit REST failure/policy rules; integration blocked I/O, roster preservation and late-response rejection | Degraded dashboard warning and live control/detection while REST is unavailable or blocked |
 | E6 | Unit deadline/freshness policy; integration controller revalidation; E2E healthy empty dummy, startup guard, STOPPING/STOPPED and confirmed exit | Dashboard OFF and notice visibility after the automatic stop |
+| E22–E25 | Unit `main()` wiring when `autoStart`/`web.enabled` are off, including the headless keep-alive and its Ctrl-C exit; unit supervisor auto-stop-disabled idle; unit player-manager tracking-disabled roster drop | Port 8211/8213 listener absence, headless log output, empty live player list, and that bans still work with tracking off |
 | E12, E13 | Unit stop/state contracts; integration four-worker lifecycle, failed stops, and delayed LGSM stand-in shutdown | Fault-path behavior with the deployed process backend |
 | E16 | Integration fixtures clean up owned processes; E2E fixtures perform cleanup | Rescan exact dummy processes and QA-owned ports, including launcher children; verify unrelated processes were untouched |
 
