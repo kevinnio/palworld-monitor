@@ -17,6 +17,9 @@ from test.support import (
     cleanup_temp_file,
 )
 
+# File permissions only restrict a non-root POSIX user; root bypasses them.
+POSIX_PERMISSIONS_ENFORCED = os.name != "nt" and os.geteuid() != 0
+
 
 class TestBanlistManager:
     """Test suite for BanlistManager class."""
@@ -334,24 +337,29 @@ class TestBanlistManager:
 
         assert manager.access_warnings() == []
 
-    def test_access_warnings_unreadable_file(self, tmp_path, monkeypatch):
+    @pytest.mark.skipif(
+        not POSIX_PERMISSIONS_ENFORCED, reason="needs a non-root POSIX account"
+    )
+    def test_access_warnings_unreadable_file(self, tmp_path):
         path = tmp_path / "banlist.txt"
         path.write_text("")
-        monkeypatch.setattr(
-            BanlistManager, "_is_readable", staticmethod(lambda _path: False)
-        )
+        path.chmod(0o200)  # appendable, but not readable
 
         warnings = BanlistManager(EventBus(), str(path)).access_warnings()
 
         assert len(warnings) == 1
         assert "Cannot read" in warnings[0]
+        import getpass
 
-    def test_access_warnings_unwritable_file(self, tmp_path, monkeypatch):
+        assert f"running as user '{getpass.getuser()}'" in warnings[0]
+
+    @pytest.mark.skipif(
+        not POSIX_PERMISSIONS_ENFORCED, reason="needs a non-root POSIX account"
+    )
+    def test_access_warnings_unwritable_file(self, tmp_path):
         path = tmp_path / "banlist.txt"
         path.write_text("")
-        monkeypatch.setattr(
-            BanlistManager, "_is_writable", staticmethod(lambda _path: False)
-        )
+        path.chmod(0o400)  # readable, but not writable
 
         warnings = BanlistManager(EventBus(), str(path)).access_warnings()
 

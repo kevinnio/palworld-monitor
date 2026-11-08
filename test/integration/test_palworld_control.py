@@ -706,6 +706,20 @@ class TestPalWorldController:
         assert harness.pm.closed is True
 
 
+def _moderation_controller():
+    """A real facade whose REST client and banlist are fakes."""
+    client = MagicMock()
+    banlist = MagicMock()
+    controller = PalWorldController(
+        client=client,
+        process_manager=MagicMock(),
+        player_manager=MagicMock(),
+        banlist_manager=banlist,
+        bus=EventBus(),
+    )
+    return controller, client, banlist
+
+
 @pytest.mark.parametrize(
     "action,storage", [("ban_player", "add_ban"), ("unban_player", "remove_ban")]
 )
@@ -713,14 +727,12 @@ class TestPalWorldController:
 def test_moderation_reports_api_and_storage_failures(
     action, storage, api_success, storage_success
 ):
-    controller = PalWorldController.__new__(PalWorldController)
-    controller.client = MagicMock()
-    controller.banlist_manager = MagicMock()
-    getattr(controller.client, action).return_value = api_success
-    getattr(controller.banlist_manager, storage).return_value = storage_success
+    controller, client, banlist = _moderation_controller()
+    getattr(client, action).return_value = api_success
+    getattr(banlist, storage).return_value = storage_success
 
     assert getattr(controller, action)("steam_123") is False
-    assert getattr(controller.banlist_manager, storage).call_count == int(api_success)
+    assert getattr(banlist, storage).call_count == int(api_success)
 
 
 def settings_auto_stop_delay(harness):
