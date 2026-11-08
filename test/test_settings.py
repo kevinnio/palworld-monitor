@@ -340,7 +340,7 @@ class TestSettings:
 
         with self._temp_server_exe() as server_exe_path:
             test_settings = {
-                "server": {"exePath": server_exe_path},
+                "palserver": {"exePath": server_exe_path},
                 "web": {"password": "webpass123"},
             }
 
@@ -352,8 +352,12 @@ class TestSettings:
 
             try:
                 settings.readSettings(temp_path)
-                with pytest.raises(ValueError, match="palworldServerAdminPassword"):
+                with pytest.raises(
+                    ValueError, match="palworldServerAdminPassword"
+                ) as excinfo:
                     settings.validate_settings()
+                # Isolated failure: the executable is present and valid.
+                assert "palworldServerExePath" not in str(excinfo.value)
             finally:
                 os.unlink(temp_path)
 
@@ -363,7 +367,10 @@ class TestSettings:
 
         with self._temp_server_exe() as server_exe_path:
             test_settings = {
-                "server": {"exePath": server_exe_path, "adminPassword": "admin123"},
+                "palserver": {
+                    "exePath": server_exe_path,
+                    "adminPassword": "admin123",
+                },
                 "web": {"enabled": True},
             }
 
@@ -375,8 +382,11 @@ class TestSettings:
 
             try:
                 settings.readSettings(temp_path)
-                with pytest.raises(ValueError, match="webPassword"):
+                with pytest.raises(ValueError, match="webPassword") as excinfo:
                     settings.validate_settings()
+                # Isolated failure: everything else the app requires is valid.
+                assert "palworldServerExePath" not in str(excinfo.value)
+                assert "palworldServerAdminPassword" not in str(excinfo.value)
             finally:
                 os.unlink(temp_path)
 

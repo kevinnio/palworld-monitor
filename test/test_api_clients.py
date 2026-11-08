@@ -21,17 +21,6 @@ def mock_http_response():
 class TestRestClient:
     """Test suite for RestClient."""
 
-    def test_init(self, mock_settings, mock_http_response):
-        """Test RestClient can be initialized and make requests."""
-        client = RestClient()
-        # Test behavior: client can successfully make requests
-        mock_http_response.content = b'{"success": true}'
-        mock_http_response.json.return_value = {"success": True}
-
-        with patch("requests.get", return_value=mock_http_response):
-            result = client._make_get_request("test")
-            assert result == {"success": True}
-
     def test_make_request_success(self, mock_settings, mock_http_response):
         """Test successful HTTP request returns expected data."""
         mock_http_response.content = b'{"success": true, "data": "test"}'
@@ -48,7 +37,9 @@ class TestRestClient:
         "status_code,expected",
         [(200, True), (204, False), (400, False), (401, False), (500, False)],
     )
-    def test_make_request_no_content(self, mock_settings, status_code, expected):
+    def test_moderation_post_returns_true_only_on_success(
+        self, mock_settings, status_code, expected
+    ):
         """Moderation returns a boolean even when PalServer sends no body."""
         mock_response = MagicMock()
         mock_response.status_code = status_code
