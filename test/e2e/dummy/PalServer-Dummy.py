@@ -59,8 +59,14 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _require_auth(self):
         if not _check_auth(self.headers):
+            # Drain the body before answering: closing on a client that is still
+            # sending resets the connection and fails its request.
+            length = int(self.headers.get("Content-Length", 0))
+            if length:
+                self.rfile.read(length)
             self.send_response(401)
             self.send_header("WWW-Authenticate", 'Basic realm="Palworld"')
+            self.send_header("Content-Length", "0")
             self.end_headers()
             return False
         return True
