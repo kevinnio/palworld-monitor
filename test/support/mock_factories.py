@@ -25,18 +25,3 @@ def create_mock_http_response(
     response.json.return_value = json_data or {"success": True}
     response.raise_for_status.return_value = raise_for_status
     return response
-
-
-def create_mock_api_client():
-    """Create a mock API client with default return values.
-
-    Returns:
-        MagicMock configured as an API client
-    """
-    mock = MagicMock()
-    mock.get_player_count.return_value = 0
-    mock.get_player_names.return_value = []
-    mock.kick_player.return_value = True
-    mock.ban_player.return_value = True
-    mock.unban_player.return_value = True
-    return mock

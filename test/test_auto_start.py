@@ -6,73 +6,73 @@ and committed lifecycle subscriptions.
 import logging
 import socket
 import threading
-import types
 from unittest.mock import MagicMock, patch
 
 from src.auto_start import AutoStartManager
 from src.events import Event, EventBus
 from src.lifecycle.messages import LifecycleState
 from src.settings import settings
+from test.support import wait_until
 
 FIRST_PACKET_PATTERN = b"\x09\x08\x00"
 
 
-class RecordingBus(EventBus):
-    def __init__(self):
-        super().__init__()
-        self.subscriptions = []
-
-    def subscribe(self, event_type, callback):
-        self.subscriptions.append((event_type, callback))
-        super().subscribe(event_type, callback)
-
-
 class TestAutoStartSubscriptions:
-    """Test suite for committed lifecycle subscriptions."""
+    """A committed lifecycle state starts and stops the packet listener."""
 
-    def test_init_subscribes_to_server_events(self):
-        bus = RecordingBus()
-        manager = AutoStartManager(None, bus=bus)
+    @staticmethod
+    def _stopped_controller():
+        controller = MagicMock()
+        controller.state = LifecycleState.STOPPED
+        controller.start_server.return_value = False
+        return controller
 
-        assert (Event.SERVER_STARTED, manager.stop_listen_thread) in bus.subscriptions
-        assert (
-            Event.SERVER_STOPPED,
-            manager.listen_palworld_access,
-        ) in bus.subscriptions
-        assert (Event.LIFECYCLE_CHANGED, manager._on_lifecycle_changed) in (
-            bus.subscriptions
-        )
-
-    def test_starting_lifecycle_stops_the_listener_before_launch(self):
+    def _listening_manager(self, mock_settings):
+        """An AutoStartManager whose listener is bound to an ephemeral port."""
+        mock_settings.palworldServerPort = 0
         bus = EventBus()
-        manager = AutoStartManager(None, bus=bus)
+        manager = AutoStartManager(self._stopped_controller(), bus=bus)
+        manager.listen_palworld_access()
+        wait_until(lambda: manager.sock is not None, message="listener never bound")
+        return bus, manager
 
-        with patch.object(manager, "stop_listen_thread") as stop:
-            bus.publish(Event.LIFECYCLE_CHANGED, {"state": "STARTING"})
+    def test_starting_lifecycle_releases_the_game_port(self, mock_settings):
+        bus, manager = self._listening_manager(mock_settings)
+        try:
+            bus.publish(Event.LIFECYCLE_CHANGED, {"state": LifecycleState.STARTING})
 
-        stop.assert_called_once()
+            assert manager.listen_thread is None
+            assert manager.sock is None
+        finally:
+            manager.close()
 
-    def test_server_started_handler_is_stop_listen_thread(self):
-        bus = RecordingBus()
-        manager = AutoStartManager(None, bus=bus)
+    def test_server_started_stops_the_listener(self, mock_settings):
+        bus, manager = self._listening_manager(mock_settings)
+        try:
+            bus.publish(Event.SERVER_STARTED, {"pid": 12345, "state": "RUNNING"})
 
-        handler = dict(bus.subscriptions)[Event.SERVER_STARTED]
-        assert isinstance(handler, types.MethodType)
-        assert handler.__self__ is manager
-        assert handler.__func__.__name__ == "stop_listen_thread"
+            assert manager.listen_thread is None
+            assert manager.sock is None
+        finally:
+            manager.close()
 
-    def test_server_stopped_handler_is_listen_palworld_access(self):
-        bus = RecordingBus()
-        manager = AutoStartManager(None, bus=bus)
+    def test_server_stopped_rearms_the_listener(self, mock_settings):
+        bus, manager = self._listening_manager(mock_settings)
+        try:
+            manager.stop_listen_thread()
+            assert manager.listen_thread is None
 
-        handler = dict(bus.subscriptions)[Event.SERVER_STOPPED]
-        assert isinstance(handler, types.MethodType)
-        assert handler.__self__ is manager
-        assert handler.__func__.__name__ == "listen_palworld_access"
+            bus.publish(Event.SERVER_STOPPED, {"state": "STOPPED"})
 
-    def test_close_unsubscribes_and_stops_listener(self):
-        bus = RecordingBus()
-        manager = AutoStartManager(None, bus=bus)
+            wait_until(
+                lambda: manager.sock is not None, message="listener not re-armed"
+            )
+            assert manager.listen_thread is not None
+        finally:
+            manager.close()
+
+    def test_close_unsubscribes_and_stops_listener(self, mock_settings):
+        bus, manager = self._listening_manager(mock_settings)
 
         manager.close()
 
@@ -129,7 +129,7 @@ class TestAutoStartSocketHandling:
         assert result is True  # No-op should succeed
 
     def test_wait_for_player_connection_with_packet(self, mock_settings):
-        """Test wait_for_player_connection with a valid packet."""
+        """A real client packet makes the listener report a connection."""
         manager = AutoStartManager(None, EventBus())
         mock_sock = MagicMock()
         mock_sock.recvfrom.return_value = (
@@ -137,10 +137,8 @@ class TestAutoStartSocketHandling:
             ("127.0.0.1", settings.palworldServerPort),
         )
 
-        with patch.object(manager, "_is_player_connection_packet", return_value=True):
-            manager.sock = mock_sock
-            result = manager.wait_for_player_connection()
-            assert result is True
+        manager.sock = mock_sock
+        assert manager.wait_for_player_connection() is True
 
     def test_wait_for_player_connection_socket_none(self, mock_settings):
         """Test wait_for_player_connection when socket is None."""
@@ -211,12 +209,15 @@ class TestAutoStartSocketHandling:
         assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
     def test_listen_palworld_access_core_server_running(self, mock_settings):
-        """Test listen_palworld_access_core when the server is already running."""
+        """A running server owns the game port; the listener must not bind it."""
         controller = MagicMock()
         controller.state = LifecycleState.RUNNING
         manager = AutoStartManager(controller, EventBus())
-        result = manager.listen_palworld_access_core()
-        assert result is None  # Returns None (no explicit return)
+
+        manager.listen_palworld_access_core()
+
+        assert manager.sock is None
+        controller.start_server.assert_not_called()
 
     def test_listen_palworld_access_core_starting_is_not_listened_too(
         self, mock_settings
@@ -250,25 +251,32 @@ class TestAutoStartSocketHandling:
         assert manager.listen_thread is None
 
     def test_listen_palworld_access_core_socket_failure(self, mock_settings):
-        """Test listen_palworld_access_core when socket opening fails."""
+        """A port that cannot be bound must not start the server."""
         controller = MagicMock()
         controller.state = LifecycleState.STOPPED
         manager = AutoStartManager(controller, EventBus())
 
         with patch.object(manager, "open_palworld_port_socket", return_value=False):
-            result = manager.listen_palworld_access_core()
-            assert result is None  # Returns None on failure
+            manager.listen_palworld_access_core()
 
-    def test_listen_palworld_access_core_start_failure(self, mock_settings):
-        """Test listen_palworld_access_core when server start fails."""
+        controller.start_server.assert_not_called()
+
+    def test_detected_connection_starts_the_server_and_releases_the_port(
+        self, mock_settings
+    ):
         controller = MagicMock()
         controller.state = LifecycleState.STOPPED
         manager = AutoStartManager(controller, EventBus())
 
-        with patch.object(manager, "wait_for_player_connection", return_value=True):
-            with patch("time.sleep", return_value=None):
-                manager.listen_palworld_access_core()
-                assert controller.start_server.called
+        with (
+            patch.object(manager, "open_palworld_port_socket", return_value=True),
+            patch.object(manager, "wait_for_player_connection", return_value=True),
+        ):
+            manager.listen_palworld_access_core()
+
+        controller.start_server.assert_called_once()
+        # The game port is released before the server process starts.
+        assert manager.sock is None
 
     def test_listen_palworld_access_core_single_attempt_when_start_is_rejected(
         self, mock_settings
@@ -337,18 +345,23 @@ class TestAutoStartAbortFlow:
         assert manager.is_aborting is True
 
     def test_listen_palworld_access_stops_existing_thread(self, mock_settings):
-        """Test that listen_palworld_access stops any existing thread first."""
+        """Starting a new listener replaces the previous thread."""
+        mock_settings.palworldServerPort = 0
         controller = MagicMock()
         controller.state = LifecycleState.STOPPED
         manager = AutoStartManager(controller, EventBus())
 
-        manager.listen_palworld_access()
-        assert manager.listen_thread is not None
+        try:
+            manager.listen_palworld_access()
+            first = manager.listen_thread
+            wait_until(lambda: manager.sock is not None, message="listener never bound")
 
-        manager.listen_palworld_access()
-        assert manager.listen_thread is not None
+            manager.listen_palworld_access()
 
-        manager.stop_listen_thread()
+            assert manager.listen_thread is not first
+            assert not first.is_alive()
+        finally:
+            manager.close()
 
     def test_wait_for_player_connection_returns_false_on_aborted(self, mock_settings):
         """Test that wait_for_player_connection returns False when aborted."""

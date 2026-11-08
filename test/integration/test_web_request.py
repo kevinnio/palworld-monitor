@@ -19,24 +19,6 @@ class TestLoginPageRendering:
         assert b"Palworld Server" in response.data
         assert b"Admin Login" in response.data
 
-    def test_login_page_shows_error_message(self, client):
-        """POST invalid credentials shows error message on login page."""
-        # First POST with wrong password to trigger error rendering
-        response = client.post(
-            "/login",
-            data={
-                "username": "admin",
-                "password": "wrong_password",
-            },
-            follow_redirects=False,
-        )
-
-        assert response.status_code == 200
-        assert (
-            b"Invalid credentials" in response.data
-            or b"Too many failed attempts" in response.data
-        )
-
 
 class TestSuccessfulLoginFlow:
     """Test suite for successful login flow."""
@@ -89,35 +71,25 @@ class TestFailedLoginFlow:
         )
 
         assert response.status_code == 200
-        # Should contain error message in the rendered template
-        assert (
-            b"Invalid credentials" in response.data
-            or b"Too many failed attempts" in response.data
-        )
+        assert b"Invalid credentials" in response.data
 
-    def test_login_attempt_counter_increments(self, client):
-        """Multiple failed login attempts increment the counter."""
-        # First attempt
-        client.post(
-            "/login",
-            data={
-                "username": "admin",
-                "password": "wrong_password",
-            },
-            follow_redirects=False,
-        )
+    def test_failed_attempts_count_down_then_lock_out(self, web_app_factory):
+        """Each failure decrements the allowance, warns, then locks the account."""
+        client = web_app_factory.app.test_client()
 
-        # Second attempt - should still show error but with different message
-        response = client.post(
-            "/login",
-            data={
-                "username": "admin",
-                "password": "another_wrong_password",
-            },
-            follow_redirects=False,
-        )
+        def fail_login():
+            return client.post(
+                "/login",
+                data={"username": "admin", "password": "wrong_password"},
+                follow_redirects=False,
+            ).get_data(as_text=True)
 
-        assert response.status_code == 200
+        # mock_settings.maxLoginAttempts is 5; warnings start at two remaining.
+        assert "attempts remaining" not in fail_login()
+        assert "attempts remaining" not in fail_login()
+        assert "2 attempts remaining before lockout" in fail_login()
+        assert "1 attempts remaining before lockout" in fail_login()
+        assert "Too many failed attempts. Account locked." in fail_login()
 
 
 class TestRememberMeCheckbox:
@@ -154,6 +126,8 @@ class TestLogoutFlow:
 
 
 class TestIndexPageRendering:
+    """Test suite for index/dashboard page rendering."""
+
     @pytest.mark.parametrize(
         "enabled,running", [(False, False), (False, True), (True, False), (True, True)]
     )
@@ -173,36 +147,6 @@ class TestIndexPageRendering:
                 in html.split('id="autoStopNotice"', 1)[1].split(">", 1)[0]
             ) is not running
 
-    """Test suite for index/dashboard page rendering."""
-
-    def test_auto_stop_notice_hidden_when_stopped(self, auth_client):
-        response = auth_client.get("/")
-
-        assert response.status_code == 200
-        assert b'id="autoStopNotice" style="margin-top: 30px; display: none;"' in (
-            response.data
-        )
-
-    def test_auto_stop_notice_visible_when_running(self, auth_client, web_app_factory):
-        snapshot = dict(web_app_factory.palworld_controller.get_snapshot.return_value)
-        snapshot["state"] = "RUNNING"
-        web_app_factory.palworld_controller.get_snapshot.return_value = snapshot
-
-        response = auth_client.get("/")
-
-        assert response.status_code == 200
-        assert b'id="autoStopNotice" style="margin-top: 30px;"' in response.data
-
-    def test_auto_stop_notice_absent_when_auto_stop_disabled(
-        self, auth_client, mock_settings, monkeypatch
-    ):
-        monkeypatch.setattr(mock_settings, "autoStop", False)
-
-        response = auth_client.get("/")
-
-        assert response.status_code == 200
-        assert b'id="autoStopNotice"' not in response.data
-
     def test_index_page_renders_when_logged_in(self, auth_client):
         """GET / renders the dashboard with player data when authenticated."""
         response = auth_client.get("/")
@@ -211,26 +155,44 @@ class TestIndexPageRendering:
         # Should contain status indicators and action buttons
         assert b"Update Server Status" in response.data or b"getStatus" in response.data
 
-    def test_index_page_shows_status_indicators(self, auth_client):
-        """Dashboard displays server status ON/OFF indicators."""
-        response = auth_client.get("/")
-        assert response.status_code == 200
-        # Should contain status indicator elements
-        assert b"status-on" in response.data or b"status-off" in response.data
+    @pytest.mark.parametrize(
+        "state,visible,hidden",
+        [("STOPPED", "onBtn", "offBtn"), ("RUNNING", "offBtn", "onBtn")],
+    )
+    def test_dashboard_offers_the_action_that_matches_the_state(
+        self, auth_client, web_app_factory, state, visible, hidden
+    ):
+        """The dashboard renders only the start/stop button the state allows."""
+        snapshot = dict(web_app_factory.palworld_controller.get_snapshot.return_value)
+        snapshot["state"] = state
+        web_app_factory.palworld_controller.get_snapshot.return_value = snapshot
 
-    def test_index_page_shows_action_buttons(self, auth_client):
-        """Dashboard displays start/stop buttons when controlServerThroughWeb is enabled."""
-        response = auth_client.get("/")
-        assert response.status_code == 200
-        # Should contain action button elements
-        assert b"Start Server" in response.data or b"Stop Server" in response.data
+        html = auth_client.get("/").get_data(as_text=True)
+
+        assert "display:none" not in self._tag(html, visible)
+        assert "display:none" in self._tag(html, hidden)
+
+    def test_dashboard_hides_controls_when_web_control_is_disabled(
+        self, auth_client, mock_settings
+    ):
+        mock_settings.controlServerThroughWeb = False
+
+        html = auth_client.get("/").get_data(as_text=True)
+
+        assert 'id="onBtn"' not in html
+        assert 'id="offBtn"' not in html
+
+    @staticmethod
+    def _tag(html, element_id):
+        start = html.index(f'id="{element_id}"')
+        return html[start : html.index(">", start)]
 
 
 class TestStatusUpdatePolling:
     """Test suite for server status update polling."""
 
-    def test_get_status_returns_json(self, auth_client):
-        """POST /action?action=getStatus returns JSON with server state."""
+    def test_get_status_returns_the_committed_snapshot(self, auth_client):
+        """POST /action returns the same JSON view of the committed state."""
         response = auth_client.post(
             "/action",
             data={"action": "getStatus"},
@@ -238,34 +200,40 @@ class TestStatusUpdatePolling:
         )
 
         assert response.status_code == 200
-        # Should return the committed lifecycle + REST health snapshot
-        import json
-
-        data = json.loads(response.data)
-        assert "data" in data
-        assert data["data"]["state"] in ("STOPPED", "STARTING", "RUNNING", "STOPPING")
-        assert data["data"]["playerData"] in ("unknown", "ok", "unavailable")
+        data = response.get_json()
+        assert data["data"]["state"] == "STOPPED"
+        assert data["data"]["playerData"] == "unknown"
 
 
 class TestServerStartStopActions:
     """Test suite for server start/stop actions."""
 
-    def test_start_server_action(self, auth_client):
-        """POST /action?action=startServer dispatches to controller."""
+    @pytest.mark.parametrize(
+        "action,method",
+        [("startServer", "start_server"), ("stopServer", "stop_server")],
+    )
+    def test_action_dispatches_to_controller(
+        self, auth_client, web_app_factory, mock_settings, action, method
+    ):
+        """POST /action drives the controller and returns the committed snapshot."""
         response = auth_client.post(
             "/action",
-            data={"action": "startServer"},
+            data={"action": action},
             content_type="application/x-www-form-urlencoded",
         )
 
         assert response.status_code == 200
+        getattr(web_app_factory.palworld_controller, method).assert_called_once()
+        body = response.get_json()
+        assert body["data"]["state"] == "STOPPED"
+        assert body["autoStopDelay"] == round(mock_settings.autoStopDelay)
 
 
 class TestKickPlayerAction:
     """Test suite for kick player action."""
 
-    def test_kick_player_returns_json(self, auth_client):
-        """POST /kick with steam_id returns success/failure JSON."""
+    def test_kick_player_returns_json(self, auth_client, web_app_factory):
+        """POST /kick routes the Steam ID to the controller."""
         response = auth_client.post(
             "/kick",
             data={"steam_id": "123456789"},
@@ -273,13 +241,17 @@ class TestKickPlayerAction:
         )
 
         assert response.status_code == 200
+        assert response.get_json()["success"] is True
+        web_app_factory.palworld_controller.kick_player.assert_called_once_with(
+            "123456789"
+        )
 
 
 class TestBanPlayerAction:
     """Test suite for ban player action."""
 
-    def test_ban_player_returns_json(self, auth_client):
-        """POST /ban with steam_id returns success/failure JSON."""
+    def test_ban_player_returns_json(self, auth_client, web_app_factory):
+        """POST /ban routes the Steam ID to the controller."""
         response = auth_client.post(
             "/ban",
             data={"steam_id": "123456789"},
@@ -287,13 +259,17 @@ class TestBanPlayerAction:
         )
 
         assert response.status_code == 200
+        assert response.get_json()["success"] is True
+        web_app_factory.palworld_controller.ban_player.assert_called_once_with(
+            "123456789"
+        )
 
 
 class TestUnbanPlayerAction:
     """Test suite for unban player action."""
 
-    def test_unban_player_returns_json(self, auth_client):
-        """POST /unban with steam_id returns success/failure JSON."""
+    def test_unban_player_returns_json(self, auth_client, web_app_factory):
+        """POST /unban routes the Steam ID to the controller."""
         response = auth_client.post(
             "/unban",
             data={"steam_id": "123456789"},
@@ -301,6 +277,10 @@ class TestUnbanPlayerAction:
         )
 
         assert response.status_code == 200
+        assert response.get_json()["success"] is True
+        web_app_factory.palworld_controller.unban_player.assert_called_once_with(
+            "123456789"
+        )
 
 
 class TestBanStateUpdates:
@@ -381,45 +361,38 @@ class TestSessionTimeoutRedirectsToLogin:
     """Test suite for session timeout behavior."""
 
     def test_session_timeout_redirects_to_login(self, client):
-        """When session expires, AJAX responses redirect to /login?redirect=..."""
-        # Access a protected route without logging in - should redirect to login
+        """An unauthenticated request is sent to the login page."""
         response = client.get("/")
-        # Should redirect to login page (either directly or via session timeout)
-        assert response.status_code in [302, 401]
+
+        assert response.status_code == 302
+        assert "/login" in response.headers["Location"]
 
 
 class TestLockedOutUserCantLogin:
     """Test suite for account lockout behavior."""
 
-    def test_locked_out_user_cannot_login(self, client):
-        """After max failed attempts with short lockout, login form button is disabled and POST returns error page."""
-        # Use a very short lockout duration (1 second) to make the test fast
-        import time
+    def test_locked_out_user_cannot_login(self, web_app_factory):
+        """After max failed attempts the login page is replaced by a lockout notice.
 
-        # Make multiple failed login attempts to trigger lockout
-        for i in range(3):
+        The countdown and per-attempt behaviour is covered in
+        TestFailedLoginFlow; this pins the locked-out page itself.
+        """
+        client = web_app_factory.app.test_client()
+        for attempt in range(5):
             response = client.post(
                 "/login",
-                data={
-                    "username": "admin",
-                    "password": f"wrong_password_{i}",
-                },
+                data={"username": "admin", "password": f"wrong_password_{attempt}"},
                 follow_redirects=False,
             )
-
             assert response.status_code == 200
 
-        # Wait for lockout to expire (1 second)
-        time.sleep(1.5)
-
-        # Try to login again - should still fail due to lockout
-        response = client.post(
+        locked = client.post(
             "/login",
-            data={
-                "username": "admin",
-                "password": "wrong_password_3",
-            },
+            data={"username": "test_admin", "password": "test_web_password"},
             follow_redirects=False,
         )
 
-        assert response.status_code == 200
+        html = locked.get_data(as_text=True)
+        assert "Too many failed attempts. Try again in" in html
+        assert "Locked Out" in html
+        assert client.get("/").status_code == 302

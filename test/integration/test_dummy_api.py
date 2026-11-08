@@ -25,9 +25,9 @@ AUTH = HTTPBasicAuth("admin", "palworld123")
 BASE = "http://127.0.0.1:8212/v1/api"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def dummy_process():
-    """Start the dummy server directly, tear it down after."""
+    """Start a fresh dummy server for each test so mutations cannot leak."""
     with socket.socket() as listener:
         listener.settimeout(1)
         if listener.connect_ex(("127.0.0.1", 8212)) == 0:
@@ -78,7 +78,11 @@ def test_get_players(dummy_process):
     assert r.status_code == 200
     data = r.json()
     assert "players" in data
-    assert len(data["players"]) >= 3
+    assert [p["playerId"] for p in data["players"]] == [
+        "steam_001",
+        "steam_002",
+        "steam_003",
+    ]
     for p in data["players"]:
         for key in ("name", "playerId", "userId", "level"):
             assert key in p, f"Missing '{key}'"
@@ -138,10 +142,12 @@ def test_ban(dummy_process):
 
 
 def test_unban(dummy_process):
+    """PalServer answers moderation calls with an empty 200, not a body."""
     r = requests.post(
         f"{BASE}/unban", json={"userid": "steam_003"}, auth=AUTH, timeout=5
     )
     assert r.status_code == 200
+    assert r.content == b""
     assert r.content == b""
 
 

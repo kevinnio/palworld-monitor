@@ -6,40 +6,20 @@ import pytest
 import sys
 import os
 import json
-from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.player_manager import PlayerManager
-from src.events import EventBus
-from test.support import (
-    create_temp_data_dir,
-    cleanup_temp_dir,
-    create_mock_path_join,
-)
+from src.events import Event, EventBus
 
 
 class TestPlayerManager:
     """Test suite for PlayerManager class."""
 
     @pytest.fixture
-    def temp_data_dir(self):
-        """Create a temporary data directory for test files."""
-        temp_dir, data_dir = create_temp_data_dir()
-        yield data_dir
-        cleanup_temp_dir(temp_dir)
-
-    @pytest.fixture
-    def player_manager(self, temp_data_dir, monkeypatch):
-        """Create a PlayerManager instance with temporary data directory."""
-        data_file_path = os.path.join(temp_data_dir, "players.json")
-        mock_join = create_mock_path_join(data_file_path)
-
-        monkeypatch.setattr("os.path.join", mock_join)
-        manager = PlayerManager(EventBus())
-        # Also set it directly to be sure
-        manager.data_file = data_file_path
-        return manager
+    def player_manager(self, tmp_path):
+        """Create a PlayerManager that persists into a temporary directory."""
+        return PlayerManager(EventBus(), data_file=str(tmp_path / "players.json"))
 
     def test_initialization(self, player_manager):
         """Test PlayerManager can track players after initialization."""
@@ -145,19 +125,12 @@ class TestPlayerManager:
         player_manager.mark_all_offline()
         assert player_manager.get_total_player_count() == 2
 
-    def test_save_and_load_player_data(self, player_manager, temp_data_dir):
+    def test_save_and_load_player_data(self, player_manager):
         """Test saving and loading player data."""
         player_manager.update_players_from_server([["Player1", "uid1", "111", "10"]])
-        player_manager._save_player_data()
 
         # Create new manager instance to test loading
-        data_file_path = os.path.join(temp_data_dir, "players.json")
-        mock_join = create_mock_path_join(data_file_path)
-
-        with patch("os.path.join", mock_join):
-            new_manager = PlayerManager(EventBus())
-            new_manager.data_file = data_file_path
-            new_manager._load_player_data()
+        new_manager = PlayerManager(EventBus(), data_file=player_manager.data_file)
 
         assert "111" in new_manager.players
         assert new_manager.players["111"]["name"] == "Player1"
@@ -174,7 +147,7 @@ class TestPlayerManager:
         assert player["level"] == "10"
 
     def test_player_last_seen_timestamp(self, player_manager):
-        """Test that last_online timestamp is updated."""
+        """Every roster sample refreshes the player's last-seen time."""
         import time
 
         player_manager.update_players_from_server([["TestPlayer", "uid1", "111", "10"]])
@@ -184,41 +157,69 @@ class TestPlayerManager:
         player_manager.update_players_from_server([["TestPlayer", "uid1", "111", "10"]])
         second_seen = player_manager.players["111"]["last_online"]
 
-        assert second_seen >= first_seen
+        assert second_seen > first_seen
 
-    def test_load_nonexistent_file(self, temp_data_dir, monkeypatch):
+    def test_tracking_disabled_drops_the_roster(self, player_manager, monkeypatch):
+        """features.playerTracking: false — a roster sample is not stored or persisted."""
+        monkeypatch.setattr("src.player_manager.settings.enablePlayerTracking", False)
+
+        bus_events = []
+        player_manager.bus.subscribe(
+            Event.PLAYER_JOINED, lambda data: bus_events.append(data)
+        )
+
+        player_manager.update_players_from_server([["Player1", "uid1", "111", "10"]])
+
+        assert player_manager.players == {}
+        assert player_manager.get_total_player_count() == 0
+        assert bus_events == []
+        with open(player_manager.data_file, encoding="utf-8") as f:
+            assert json.load(f)["players"] == {}
+
+    def test_load_nonexistent_file(self, tmp_path):
         """Test loading when data file doesn't exist."""
-        data_file_path = os.path.join(temp_data_dir, "nonexistent.json")
-        mock_join = create_mock_path_join(data_file_path)
-
-        monkeypatch.setattr("os.path.join", mock_join)
-        manager = PlayerManager(EventBus())
-        manager.data_file = data_file_path
+        manager = PlayerManager(
+            EventBus(), data_file=str(tmp_path / "nonexistent.json")
+        )
         assert manager.players == {}
 
-    def test_migration_from_uid_to_steamid(self, temp_data_dir, monkeypatch):
-        """Test migration from old UID-based format to Steam ID format."""
-        # Create old format data
+    def test_migration_from_uid_to_steamid(self, tmp_path):
+        """A version-0 UID-keyed file is re-keyed by Steam ID and rewritten."""
         old_data = {
             "version": 0,
             "players": {
                 "old_uid_123": {
                     "name": "TestPlayer",
                     "uid": "old_uid_123",
-                    "is_online": True,
-                }
+                    "steam_id": "76561198000000001",
+                    "currently_online": True,
+                },
+                "old_uid_456": {
+                    "name": "NoSteamId",
+                    "uid": "old_uid_456",
+                },
+                "old_uid_789": {
+                    "name": "UnknownSteamId",
+                    "uid": "old_uid_789",
+                    "steam_id": "Unknown",
+                },
             },
         }
 
-        data_file = os.path.join(temp_data_dir, "players.json")
+        data_file = str(tmp_path / "players.json")
         with open(data_file, "w") as f:
             json.dump(old_data, f)
 
-        mock_join = create_mock_path_join(data_file)
-        monkeypatch.setattr("os.path.join", mock_join)
-        manager = PlayerManager(EventBus())
-        manager.data_file = data_file
+        manager = PlayerManager(EventBus(), data_file=data_file)
 
-        # Should have migrated and saved
-        assert manager.version == 1
-        # Note: Actual migration logic depends on implementation details
+        # Entries without a usable Steam ID cannot be addressed by the REST API.
+        assert list(manager.players) == ["76561198000000001"]
+        assert manager.players["76561198000000001"]["name"] == "TestPlayer"
+        assert "uid" not in manager.players["76561198000000001"]
+
+        # The migrated file is persisted, so the next run skips migration.
+        with open(data_file, encoding="utf-8") as f:
+            saved = json.load(f)
+        assert saved["version"] == 1
+        assert list(saved["players"]) == ["76561198000000001"]
+        assert PlayerManager(EventBus(), data_file=data_file).players == manager.players

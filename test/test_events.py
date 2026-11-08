@@ -27,8 +27,11 @@ class TestEventBus:
 
     def test_no_subscribers(self):
         bus = EventBus()
-        # Should not raise any exception
+
+        # Publishing with no listener is a no-op, not an error or a subscriber.
         bus.publish("NONEXISTENT_EVENT", {})
+
+        assert bus.subscriber_count() == 0
 
     def test_unsubscribe_stops_delivery(self):
         bus = EventBus()

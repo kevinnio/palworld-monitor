@@ -156,6 +156,24 @@ class TestSupervisor:
         env.supervisor.handle(ProcessObservation(0, empty))
         assert len(events_of(env, Event.SERVER_STOPPED)) == 1
 
+    def test_disabled_auto_stop_never_arms_or_stops(self, env, mock_settings):
+        """features.autoStop: false — an idle empty server stays up indefinitely."""
+        mock_settings.autoStop = False
+        start_running(env)
+
+        for seq in (1, 2, 3):
+            env.clock.advance(mock_settings.autoStopDelay + 60)
+            env.supervisor.handle(
+                RosterSample(env.supervisor.generation, env.pm.identity, seq, [])
+            )
+            requests = env.supervisor.on_tick()
+
+            assert not any(isinstance(item, StopRequest) for item in requests)
+            assert env.supervisor.auto_stop_deadline is None
+
+        assert env.supervisor.state == LifecycleState.RUNNING
+        assert env.pm.terminate_calls == []
+
     def test_start_command_returns_launch_request(self, env):
         command = StartCommand()
         requests = env.supervisor.handle(command)

@@ -4,29 +4,6 @@ Helper functions for creating temporary files and directories in tests.
 
 import os
 import tempfile
-import shutil
-
-
-def create_temp_data_dir():
-    """Create a temporary data directory for test files.
-
-    Returns:
-        tuple: (temp_dir_path, data_dir_path) where data_dir_path is temp_dir_path/data
-    """
-    temp_dir = tempfile.mkdtemp()
-    data_dir = os.path.join(temp_dir, "data")
-    os.makedirs(data_dir, exist_ok=True)
-    return temp_dir, data_dir
-
-
-def cleanup_temp_dir(temp_dir):
-    """Clean up a temporary directory.
-
-    Args:
-        temp_dir: Path to the temporary directory to remove
-    """
-    if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def create_temp_file_with_content(content, suffix=".txt", mode="w"):
