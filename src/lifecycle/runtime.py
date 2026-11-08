@@ -42,6 +42,11 @@ class LifecycleRuntime:
         self._start_lock = threading.Lock()
         self._threads: dict[str, threading.Thread] = {}
 
+        # Bound the time close() waits for a worker; the process worker gets
+        # longer because one LGSM launch or stop must finish first.
+        self.worker_join_timeout = _WORKER_JOIN_TIMEOUT
+        self.process_worker_join_timeout = _PROCESS_WORKER_JOIN_TIMEOUT
+
     def start(self):
         """Start the lifecycle thread and workers. Idempotent."""
         with self._start_lock:
@@ -100,9 +105,9 @@ class LifecycleRuntime:
         for name, thread in threads:
             if thread is threading.current_thread():
                 continue
-            timeout = _WORKER_JOIN_TIMEOUT
+            timeout = self.worker_join_timeout
             if name == "palworld-process":
-                timeout = _PROCESS_WORKER_JOIN_TIMEOUT
+                timeout = self.process_worker_join_timeout
             thread.join(timeout=timeout)
             if thread.is_alive():
                 logging.warning(f"Thread {thread.name} did not stop in time")

@@ -77,8 +77,12 @@ class TestLifecycleRuntime:
         runtime, _supervisor, _client, _pm, _bus = runtime_env
         runtime.start()
 
-        assert set(runtime._threads) == CONTROLLER_THREAD_NAMES
-        assert all(thread.is_alive() for thread in runtime._threads.values())
+        running = {
+            thread.name
+            for thread in threading.enumerate()
+            if thread.name.startswith("palworld-")
+        }
+        assert running == CONTROLLER_THREAD_NAMES
 
     def test_blocked_rest_response_after_stop_is_discarded(self, runtime_env):
         runtime, supervisor, client, pm, _bus = runtime_env
@@ -134,11 +138,9 @@ class TestLifecycleRuntime:
             finally:
                 runtime.close()
 
-    def test_cannot_restart_while_a_worker_is_still_blocked(
-        self, runtime_env, monkeypatch
-    ):
+    def test_cannot_restart_while_a_worker_is_still_blocked(self, runtime_env):
         runtime, supervisor, client, pm, _bus = runtime_env
-        monkeypatch.setattr("src.lifecycle.runtime._WORKER_JOIN_TIMEOUT", 0.01)
+        runtime.worker_join_timeout = 0.01
         pm.found = ProcessIdentity(1001, 10.0)
         pm.alive.add(pm.found.pid)
         client.block = threading.Event()
@@ -151,7 +153,12 @@ class TestLifecycleRuntime:
                 runtime.start()
         finally:
             client.block.set()
-            wait_until(lambda: not any(t.is_alive() for t in runtime._threads.values()))
+            wait_until(
+                lambda: (
+                    not {thread.name for thread in threading.enumerate()}
+                    & CONTROLLER_THREAD_NAMES
+                )
+            )
 
         runtime.start()
         wait_until(lambda: supervisor.get_snapshot()["playerData"] == "ok")
@@ -207,8 +214,7 @@ class TestLifecycleRuntime:
         wait_until(lambda: supervisor.state == LifecycleState.RUNNING)
 
         assert runtime.submit_command(StopCommand()) is True
-        wait_until(lambda: runtime._process_requests.empty())
-        assert supervisor.state == LifecycleState.STOPPING
+        wait_until(lambda: supervisor.state == LifecycleState.STOPPING)
         assert manager.tracked_identity == identity
 
         alive.clear()
@@ -225,7 +231,7 @@ class TestLifecycleRuntime:
     ):
         runtime, supervisor, _client, pm, _bus = runtime_env
         supervisor.server_starting_cooldown = 0
-        monkeypatch.setattr("src.lifecycle.runtime._WORKER_JOIN_TIMEOUT", 0.01)
+        runtime.worker_join_timeout = 0.01
         entered = threading.Event()
         release = threading.Event()
 
@@ -252,4 +258,6 @@ class TestLifecycleRuntime:
 
         closer.join(5)
         assert not closer.is_alive()
-        assert not runtime._threads["palworld-process"].is_alive()
+        assert "palworld-process" not in {
+            thread.name for thread in threading.enumerate()
+        }
