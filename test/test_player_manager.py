@@ -11,7 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.player_manager import PlayerManager
-from src.events import EventBus
+from src.events import Event, EventBus
 from test.support import (
     create_temp_data_dir,
     cleanup_temp_dir,
@@ -185,6 +185,23 @@ class TestPlayerManager:
         second_seen = player_manager.players["111"]["last_online"]
 
         assert second_seen >= first_seen
+
+    def test_tracking_disabled_drops_the_roster(self, player_manager, monkeypatch):
+        """features.playerTracking: false — a roster sample is not stored or persisted."""
+        monkeypatch.setattr("src.player_manager.settings.enablePlayerTracking", False)
+
+        bus_events = []
+        player_manager.bus.subscribe(
+            Event.PLAYER_JOINED, lambda data: bus_events.append(data)
+        )
+
+        player_manager.update_players_from_server([["Player1", "uid1", "111", "10"]])
+
+        assert player_manager.players == {}
+        assert player_manager.get_total_player_count() == 0
+        assert bus_events == []
+        with open(player_manager.data_file, encoding="utf-8") as f:
+            assert json.load(f)["players"] == {}
 
     def test_load_nonexistent_file(self, temp_data_dir, monkeypatch):
         """Test loading when data file doesn't exist."""
