@@ -19,6 +19,8 @@ from src.lifecycle.messages import (
     StopCommand,
     StopRequest,
     StopResult,
+    TelemetryRequest,
+    TelemetrySample,
 )
 from src.lifecycle.supervisor import Supervisor
 from src.player_manager import PlayerManager
@@ -90,7 +92,7 @@ class FakeProcessManager:
 
 
 @pytest.fixture
-def env(mock_settings, tmp_path):
+def env(mock_settings, tmp_path, request):
     mock_settings.pollingRate = 0.01
     mock_settings.autoStop = False
     mock_settings.autoStopDelay = 60
@@ -99,7 +101,14 @@ def env(mock_settings, tmp_path):
     players = PlayerManager(bus=bus, data_file=str(tmp_path / "players.json"))
     bans = BanlistManager(bus=bus, banlist_path=str(tmp_path / "banlist.txt"))
     clock = FakeClock()
-    supervisor = Supervisor(pm, players, bans, bus, clock=clock)
+    supervisor = Supervisor(
+        pm,
+        players,
+        bans,
+        bus,
+        clock=clock,
+        telemetry_enabled=getattr(request, "param", False),
+    )
     supervisor.poll_interval = 0
     supervisor.server_starting_cooldown = 0
     supervisor.server_stopping_cooldown = 0
@@ -142,6 +151,54 @@ def events_of(env, event_type):
 
 
 class TestSupervisor:
+    @pytest.mark.parametrize("env", [True], indirect=True)
+    def test_telemetry_retries_caches_version_and_clears_across_generations(self, env):
+        start_running(env)
+        supervisor = env.supervisor
+
+        def telemetry_request():
+            return next(
+                r for r in supervisor.on_tick() if isinstance(r, TelemetryRequest)
+            )
+
+        first = telemetry_request()
+        assert first.needs_version
+        supervisor.handle(TelemetrySample(first, None, None))
+        env.clock.advance(29)
+        assert not any(isinstance(r, TelemetryRequest) for r in supervisor.on_tick())
+        env.clock.advance(1)
+        retry = telemetry_request()
+        assert retry.needs_version
+        supervisor.handle(TelemetrySample(retry, "v1.0.4", 0))
+        snapshot = supervisor.get_snapshot()
+        assert snapshot["palServerVersion"] == "v1.0.4"
+        assert snapshot["uptimeSeconds"] == 0
+        assert (
+            events_of(env, Event.SERVER_STATUS)[-1]["revision"] == snapshot["revision"]
+        )
+
+        env.clock.advance(30)
+        refresh = telemetry_request()
+        assert not refresh.needs_version
+        supervisor.handle(TelemetrySample(refresh, None, None))
+        assert supervisor.get_snapshot()["palServerVersion"] == "v1.0.4"
+        assert supervisor.get_snapshot()["uptimeSeconds"] is None
+
+        env.clock.advance(30)
+        late = telemetry_request()
+        stop = supervisor.handle(StopCommand())[0]
+        stopped = env.pm.terminate_process(stop.identity)
+        supervisor.handle(StopResult(stop.generation, stop.identity, stopped))
+        assert supervisor.get_snapshot()["palServerVersion"] is None
+        assert supervisor.get_snapshot()["uptimeSeconds"] is None
+
+        launch = supervisor.handle(StartCommand())[0]
+        supervisor.handle(LaunchResult(launch.generation, ProcessIdentity(2001, 20.0)))
+        supervisor.handle(TelemetrySample(late, "v1.0.4", 90))
+        assert supervisor.get_snapshot()["palServerVersion"] is None
+        assert supervisor.get_snapshot()["uptimeSeconds"] is None
+        assert telemetry_request().needs_version
+
     def test_startup_reconcile_publishes_stopped_for_auto_start(self, env):
         empty = ProcessSnapshot(tracked=None, tracked_running=False, found=None)
 

@@ -7,7 +7,6 @@ import yaml
 import tempfile
 import os
 import sys
-from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -156,27 +155,6 @@ class TestSettings:
             )  # Should remain unchanged
         finally:
             os.unlink(temp_path)
-
-    def test_get_git_hash_success(self):
-        """Test getting git hash when git is available."""
-        settings = Settings()
-
-        with patch("subprocess.run") as mock_run:
-            mock_result = MagicMock()
-            mock_result.stdout = "abc123def456\n"
-            mock_run.return_value = mock_result
-
-            hash_value = settings.get_git_hash()
-            assert hash_value == "abc123def456"
-            mock_run.assert_called_once()
-
-    def test_get_git_hash_failure(self):
-        """Test getting git hash when git command fails."""
-        settings = Settings()
-
-        with patch("subprocess.run", side_effect=Exception("Git not found")):
-            hash_value = settings.get_git_hash()
-            assert hash_value is None
 
     def test_auto_generate_session_secret_when_missing(self):
         """Test that sessionSecretKey is auto-generated when missing from settings.yaml."""

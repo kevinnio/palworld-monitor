@@ -10,13 +10,13 @@ Run these every QA pass.
 | ID | Area | Scenario | Steps | Expected |
 |----|------|----------|-------|----------|
 | H1 | web | Login and dashboard load | Open `/login`; enter QA credentials | Login redirects to `/`; dashboard renders; no console error |
-| H2 | lifecycle/web | Initial stopped state | Load `/` with no server | Status OFF; Start visible; Stop hidden; player list shows no online players |
-| H3 | lifecycle/web | Start from the dashboard | Click Start Server | STARTING appears, then RUNNING/ON; dummy roster appears; Stop visible, Start hidden |
+| H2 | lifecycle/web | Initial stopped state | Load `/` with no server | Status Offline; Start visible; Stop hidden; player list shows no online players |
+| H3 | lifecycle/web | Start from the dashboard | Click Start Server | Starting appears, then Online; dummy roster appears; Stop visible, Start hidden |
 | H4 | web/SSE | Committed snapshot | Call getStatus twice via the page | `state` is RUNNING; `playerData` is `ok`; `revision` is monotonic; players match the dashboard |
-| H5 | players | Kick a player | Kick TestPlayer1 | Success alert; player becomes offline; other players stay online |
-| H6 | bans | Ban a player | Ban TestPlayer2 | Success alert; row shows Banned and Unban; banned list contains the ID |
-| H7 | bans | Unban a player | Unban TestPlayer2 | Success alert; row returns to offline/normal actions; banned list no longer contains the ID |
-| H8 | lifecycle/web | Stop from the dashboard | Click Stop Server | STOPPING appears, then OFF/STOPPED; tracked players are offline; Start visible, Stop hidden |
+| H5 | players | Kick a player | Kick TestPlayer1 | Inline success message; player becomes offline; other players stay online |
+| H6 | bans | Ban a player | Ban TestPlayer2 | Inline success message; row shows Banned and Unban; banned list contains the ID |
+| H7 | bans | Unban a player | Unban TestPlayer2 | Inline success message; row returns to offline/normal actions; banned list no longer contains the ID |
+| H8 | lifecycle/web | Stop from the dashboard | Click Stop Server | Stopping appears, then Offline; tracked players are offline; Start visible, Stop hidden |
 | H9 | lifecycle | Restart | Start again after stop | STARTING then RUNNING; fresh roster; no ghost players from the previous generation |
 | H10 | auto-stop UI | Notice visibility | Run once with autoStop disabled and once enabled | Disabled: no notice. Enabled + RUNNING: notice visible. Enabled + STARTING/STOPPING/STOPPED: hidden |
 
@@ -38,19 +38,25 @@ Run the ones matching changed areas, plus at least two unrelated ones.
 | E10 | bans | Ban persists across reload | Ban a player, reload `/` | Banned player still shows Banned/Unban after reload |
 | E11 | lifecycle | Rapid start/stop | Start, then stop as soon as RUNNING; start again after cooldown | Transitions remain ordered; no duplicate process; no stuck STARTING/STOPPING |
 | E12 | lifecycle | Failed stop recovery | Use a fake/forced termination failure or LGSM pending path if available | Failed stop returns to RUNNING and polling resumes; pending LGSM remains STOPPING until exit |
-| E13 | lifecycle/threads | Lean worker set | Inspect runtime thread names while stopped and running | Exactly four lifecycle threads: lifecycle, detection, poll, process; no separate launch/stop workers or LGSM watchdog |
+| E13 | lifecycle/threads | Lean worker set | Inspect runtime threads with and without the dashboard enabled | Four core lifecycle threads: lifecycle, detection, roster poll, process; one telemetry worker only with the dashboard enabled; no separate launch/stop workers or LGSM watchdog |
 | E14 | auto-start/threads | Listener re-arms without leaking | Repeat UDP start, dashboard stop, and UDP start after cooldown | One listener while STOPPED; none while RUNNING; starts succeed without duplicate listeners or processes |
 | E15 | lifecycle/threads | Blocked REST does not block control or detection | Inject a blocked REST poll; stop or crash the dummy before it returns | STOPPING/STOPPED commits remain responsive; late roster cannot revive players or regress state |
 | E16 | QA cleanup | No dummy servers left behind | After QA, stop the owned monitor and all verified dummy processes, including pre-existing leftovers and launcher children; rescan processes and ports | Zero dummy processes; no QA-owned TCP/UDP listeners; unrelated processes untouched |
 | E17 | bans/SSE | Ban state across open dashboards | Open two authenticated dashboards; ban a tracked player in one, then unban from the other | Both dashboards show Banned/Unban after the ban and normal offline actions after unban without a reload; `/banned` agrees |
 | E18 | bans | Native pair entries | Seed a disposable banlist with `steam_id,player_uid` entries and comments; ban, reload, unban one entry | One row per Steam ID; unban removes only the target entry; unrelated pairs and comments stay intact |
-| E19 | bans | Rejected and failed moderation | Submit an invalid ID through the page fetch path; cancel a confirmation; make the banlist unwritable | Invalid IDs get HTTP 400 before the API call; cancel sends nothing; storage failure shows a failure alert and keeps visible ban state |
+| E19 | bans | Rejected and failed moderation | Submit an invalid ID through the page fetch path; cancel a confirmation; make the banlist unwritable | Invalid IDs get HTTP 400 before the API call; cancel sends nothing; storage failure shows inline feedback and keeps visible ban state |
 | E20 | bans/live server | Live PalServer moderation | With a real PalServer running and auto-stop disabled, ban then unban an agreed synthetic ID through the built app | REST returns 200; the native `Pal/Saved/SaveGames/banlist.txt` gains then loses only that ID; pre-existing bans and players are untouched; the server keeps running |
 | E21 | lifecycle | Startup adoption with stale state | Leave a dummy running, plus a PID file naming a dead PID and persisted online players; start the monitor | Adopts the live dummy as RUNNING without launching a second process; stale PID and ghost roster are cleared |
 | E22 | auto-start | Auto-start disabled never binds the game port | Variant `autoStart: false`; with the app STOPPED, confirm nothing listens on UDP 8211; send `09 08 00` to UDP 8211 | No server process starts; state stays STOPPED; the probe fails instead of starting anything; no auto-start listener on 8211 |
 | E23 | auto-stop | Auto-stop disabled keeps an empty server up | Variant `autoStop: false`, `stopDelay: 5`; start a dummy with `DUMMY_PLAYER_COUNT=0`; let the monitor adopt it as RUNNING; wait past the 30 s startup guard + delay + several polls without sending stop | State stays RUNNING; no STOPPING transition; the dummy is still alive; the auto-stop notice stays hidden (H10); stopping it from the dashboard still works |
 | E24 | players | Player tracking disabled | Variant `playerTracking: false`; seed `banlist.txt` next to the dummy; start a dummy reporting players; open `/`; check `/banned`; ban one live ID through the page fetch path | `playerData=ok` but `players` stays empty and `playerCount` is 0 while the server reports players; the only rows are the seeded banlist IDs, shown by Steam ID with Unban; `data/players.json` holds no players; `/banned` lists the seed; the ban succeeds and the banlist gains the ID |
 | E25 | web | Web UI disabled runs headless | Variant `web.enabled: false`, `autoStart: true`; start the app; request `http://localhost:8213/`; send `09 08 00` to UDP 8211; read `<app-dir>/logs/palworld-monitor.log`; stop with Ctrl-C | Port 8213 refuses connections; no "Web admin UI" link and no "Web server start" line, but a "monitoring headless" line appears and the process keeps running; the UDP probe is received and starts the server (log reaches RUNNING); Ctrl-C logs "Stopping Palworld Monitor.", releases the game port and exits without a traceback |
+| E26 | web/layout | Phone and desktop layouts | Open login and a populated dashboard at 320–390 px and at desktop width; include a long player name and a ban-only Steam ID | Login and dashboard fit without sideways scrolling; mobile roster cards retain visible labels and reachable moderation controls; desktop shows a table beside server details |
+| E27 | web/theme | Shared color preference | Cycle System, Dark and Light; navigate between login and dashboard; reload; change system appearance | Manual overrides carry across both pages and reloads; System follows device appearance |
+| E28 | web/SSE | Connection indicator and roster focus | Focus a moderation button and receive a fresh snapshot; interrupt and restore the stream | Focus stays on the equivalent button if still present; connection indicator reports loss and returns to Connected on a valid snapshot |
+| E29 | web/telemetry | Server details for the current run | Check the dashboard on a stopped server, then start, wait for REST, and restart | PalServer version comes from `/info` and uptime from `/metrics`; a new run starts with both unset, independent of the monitor version or player count |
+| E30 | telemetry/build | Monitor version | Open builds from a tagged and an untagged commit without Git on the host | Monitor version shows the build's exact release tag, otherwise its short commit hash |
+| E31 | web/reporting | Bug report links | Inspect Report a bug on login and under Server details; check the README and the issue template | Both app links target the repository's `bug_report.yml` form in a new tab and send only the monitor version when known; the README links to the same form without a version; the form makes diagnostics optional and warns that reports are public |
 
 ## Change-sensitive map
 
@@ -59,7 +65,9 @@ When `qa_delta.py` reports an area, update and run the matching scenarios.
 | Changed area | Scenarios |
 |--------------|-----------|
 | lifecycle, process control, auto-start/auto-stop | H2–H4, H8–H10, E1–E7, E11–E15 |
-| web server, templates, static JS/CSS | H1–H10, E7, E9 |
+| web server, templates, static JS/CSS | H1–H10, E7, E9, E26–E29 |
+| server telemetry, version metadata, build spec | E13, E29–E30 |
+| bug reporting links and issue form | E31 |
 | player/ban managers, REST client | H5–H7, E5, E10, E17–E20 |
 | settings, CLI, setup, main composition | H1–H3, H10, E3, E5, E6, E22–E25 |
 | docs only | no new browser scenario; spot-check the affected instructions |
@@ -76,7 +84,7 @@ integration tests do not replace every visible result in a QA scenario.
 | H1, E8, E9 | Unit auth rules; integration login/failure/logout routes; E2E browser login and dashboard rendering | Browser errors, invalid-login feedback, logout protection |
 | H2, H3, H8, E1, E2 | Unit transitions/guards; integration controller/process/route behavior; E2E browser start/stop | Transitional labels, correct button visibility, duplicate start/stop requests through the live web routes |
 | H4, E7 | Unit server snapshots/revision ordering; integration payloads; auto-stop E2E reads committed SSE states | Dashboard consistency across refreshes and rejection of an older revision in page JavaScript |
-| H5, H6, H7, E10 | Unit API calls/ban storage; integration action routes and dummy API; E2E browser kick/ban reduces online counts | Alerts, exact row/banned-list state, browser unban and ban persistence after reload |
+| H5, H6, H7, E10 | Unit API calls/ban storage; integration action routes and dummy API; E2E browser kick/ban reduces online counts | Inline feedback, exact row/banned-list state, browser unban and ban persistence after reload |
 | H9, E4, E11, E14 | Unit listener behavior and zombie rejection; integration restarts, process replacement, stale generations, thread cleanup and a real unreaped Linux child | Full crash recovery and repeated UDP start/web stop/restart cycle without leaked listeners |
 | H10 | Integration initial HTML checks when stopped, running and auto-stop disabled | Live notice visibility through STARTING, RUNNING, STOPPING and STOPPED |
 | E3 | Unit packet/listener behavior; E2E sends a real UDP packet and checks process discovery | Dashboard reaches RUNNING and listener releases the game port |

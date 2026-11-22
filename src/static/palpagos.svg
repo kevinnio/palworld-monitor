@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 420" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky" x2="0" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#183a42"/><stop offset="1" stop-color="#5b9477"/>
+    </linearGradient>
+    <linearGradient id="mountain" x2="0" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#38736c"/><stop offset="1" stop-color="#264e50"/>
+    </linearGradient>
+    <pattern id="grid" width="38" height="38" patternUnits="userSpaceOnUse">
+      <path d="M38 0H0v38" fill="none" stroke="#d0ffdf" stroke-opacity=".1"/>
+    </pattern>
+    <pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(30)">
+      <path d="M0 0v5" stroke="#0e302d" stroke-opacity=".25"/>
+    </pattern>
+  </defs>
+  <path fill="url(#sky)" d="M0 0h850v420H0z"/>
+  <circle cx="594" cy="148" r="90" fill="#ddf1ad" opacity=".15"/>
+  <circle cx="594" cy="148" r="70" fill="#d7eaa6" stroke="#edffd2" stroke-opacity=".7"/>
+  <path fill="#528979" d="m0 295 70-76 65 22 73-96 30-15 33 35 50-38 43 39 57-68 43 33 91 106 42-37 67 46 92-134 19-16 75 77v247H0z"/>
+  <path fill="#609181" d="m135 241 103-111-19 66-35 19zm229-75 57-68-10 48 26 27 118 64-91-106 13 69zm300 80 92-134 19-16-24 61-11 43z"/>
+  <path fill="url(#mountain)" d="m0 294 81-22 84 27 109-99 38-15 30 26 42 30 40-35 63 26 80 44 64-32 43 20 76-64 100 33v187H0z"/>
+  <path fill="#204b4b" d="m0 300 82 26 98-20 99 20 77 32 115-49 51 10 58-38 104 25 51-14 115 8v120H0z"/>
+  <path fill="#2d6255" d="m340 420 115-47 104-15 42-29 63 3-41 20-9 13-75 27-30 28z"/>
+  <path fill="#173e3c" d="m0 353 68-15 54 19 60-10 54 20 61-3 98 56H0zm560 67 97-42 51-2 49-27 93-16v87z"/>
+  <path fill="url(#hatch)" d="m0 353 68-15 54 19 60-10 54 20 61-3 98 56H0zm560 67 97-42 51-2 49-27 93-16v87z"/>
+  <g fill="#173e3c">
+    <path d="m704 363 9-37 9 37zm22-7 12-47 12 47zm56-12 12-45 12 45zm-16 3 7-28 7 28zm-567 20 12-47 12 47zm-20-5 8-29 8 29zm-60 0 10-36 10 36z"/>
+  </g>
+  <path fill="url(#grid)" d="M0 0h850v420H0z"/>
+  <g fill="none" stroke="#bdeaca" opacity=".4">
+    <circle cx="594" cy="148" r="107" stroke-dasharray="2 5"/>
+    <path d="M594 32v14m0 204v14M478 148h14m204 0h14M305 94h16m-8-8v16m420 82h14m-7-7v14M756 60h18m-9-9v18M373 255h14m-7-7v14"/>
+    <path d="M835 20h-21m21 0v21m0 359h-21m21 0v-21M15 20h21M15 20v21m0 359h21m-21 0v-21"/>
+  </g>
+</svg>

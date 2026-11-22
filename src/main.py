@@ -597,6 +597,7 @@ def main():
         player_manager=PlayerManager(bus=bus),
         banlist_manager=BanlistManager(bus=bus),
         bus=bus,
+        telemetry_enabled=settings.useWebServer,
     )
     palworld_controller.start()
 

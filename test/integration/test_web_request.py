@@ -6,6 +6,9 @@ including template rendering, session management, CSRF protection, and all API r
 Tests run in-process without needing an actual HTTP server or browser.
 """
 
+from html import unescape
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 
 
@@ -16,8 +19,35 @@ class TestLoginPageRendering:
         """GET /login renders the login template with no errors."""
         response = client.get("/login")
         assert response.status_code == 200
-        assert b"Palworld Server" in response.data
+        assert b"<title>palword-monitor</title>" in response.data
+        assert b'rel="icon" href="/static/cattiva-icon.png"' in response.data
         assert b"Admin Login" in response.data
+
+    def test_cattiva_icon_is_served_as_png(self, client):
+        response = client.get("/static/cattiva-icon.png")
+        assert response.status_code == 200
+        assert response.mimetype == "image/png"
+        assert response.data.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+@pytest.mark.parametrize("path", ["/login", "/"])
+@pytest.mark.parametrize("version", [None, "v1.20+rc", "cfddaa1"])
+def test_bug_report_link_prefills_only_monitor_version(
+    auth_client, monkeypatch, path, version
+):
+    monkeypatch.setattr("src.web_server.get_monitor_version", lambda: version)
+    html = auth_client.get(path).get_data(as_text=True)
+    href = html.split('class="bug-report-link" href="', 1)[1].split('"', 1)[0]
+
+    url = urlsplit(unescape(href))
+    assert url.scheme == "https"
+    assert url.netloc == "github.com"
+    assert url.path == "/kevinnio/palworld-monitor/issues/new"
+    expected = {"template": ["bug_report.yml"]}
+    if version is not None:
+        expected["monitor-version"] = [version]
+    assert parse_qs(url.query) == expected
+    assert 'rel="noopener noreferrer"' in html
 
 
 class TestSuccessfulLoginFlow:
@@ -53,7 +83,8 @@ class TestSuccessfulLoginFlow:
         # Access protected route - should work without redirecting to login
         response = auth_client.get("/")
         assert response.status_code == 200
-        assert b"Palworld Dedicated Server" in response.data
+        assert b'id="dashboardTitle">Dashboard<' in response.data
+        assert b"<title>palword-monitor</title>" in response.data
 
 
 class TestFailedLoginFlow:
@@ -128,6 +159,19 @@ class TestLogoutFlow:
 class TestIndexPageRendering:
     """Test suite for index/dashboard page rendering."""
 
+    def test_server_and_monitor_versions_are_separate(
+        self, auth_client, web_app_factory, monkeypatch
+    ):
+        monkeypatch.setattr("src.web_server.get_monitor_version", lambda: "v1.20")
+        snapshot = web_app_factory.palworld_controller.get_snapshot.return_value
+        snapshot.update(state="RUNNING", palServerVersion="v1.0.4", uptimeSeconds=0)
+
+        html = auth_client.get("/").get_data(as_text=True)
+
+        assert '<dt>PalServer version</dt><dd id="palServerVersion">v1.0.4</dd>' in html
+        assert '<dt>Monitor version</dt><dd id="monitorVersion">v1.20</dd>' in html
+        assert '<dt>Uptime</dt><dd id="uptime">0s</dd>' in html
+
     @pytest.mark.parametrize(
         "enabled,running", [(False, False), (False, True), (True, False), (True, True)]
     )
@@ -151,7 +195,7 @@ class TestIndexPageRendering:
         """GET / renders the dashboard with player data when authenticated."""
         response = auth_client.get("/")
         assert response.status_code == 200
-        assert b"Palworld Dedicated Server" in response.data
+        assert b'id="dashboardTitle">Dashboard<' in response.data
         # Should contain status indicators and action buttons
         assert b"Update Server Status" in response.data or b"getStatus" in response.data
 
@@ -169,8 +213,19 @@ class TestIndexPageRendering:
 
         html = auth_client.get("/").get_data(as_text=True)
 
-        assert "display:none" not in self._tag(html, visible)
-        assert "display:none" in self._tag(html, hidden)
+        assert "display: none" not in self._tag(html, visible)
+        assert "display: none" in self._tag(html, hidden)
+
+    @pytest.mark.parametrize("path", ["/", "/login"])
+    @pytest.mark.parametrize(
+        "cookie,theme", [("dark", "dark"), ("light", "light"), ("invalid", "system")]
+    )
+    def test_dashboard_and_login_share_theme_preference(
+        self, auth_client, path, cookie, theme
+    ):
+        auth_client.set_cookie("theme", cookie)
+        html = auth_client.get(path).get_data(as_text=True)
+        assert f'<html lang="en" data-theme="{theme}">' in html
 
     def test_dashboard_hides_controls_when_web_control_is_disabled(
         self, auth_client, mock_settings

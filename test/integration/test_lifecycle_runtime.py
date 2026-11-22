@@ -56,7 +56,7 @@ class FakeClient:
 
 
 @pytest.fixture
-def runtime_env(mock_settings, tmp_path):
+def runtime_env(mock_settings, tmp_path, request):
     mock_settings.pollingRate = 0.01
     mock_settings.autoStop = False
     bus = EventBus()
@@ -65,14 +65,47 @@ def runtime_env(mock_settings, tmp_path):
     players = PlayerManager(bus=bus, data_file=str(tmp_path / "players.json"))
     bans = BanlistManager(bus=bus, banlist_path=str(tmp_path / "banlist.txt"))
     clock = FakeClock()
-    supervisor = Supervisor(pm, players, bans, bus, clock=clock)
+    telemetry_enabled = getattr(request, "param", False)
+    supervisor = Supervisor(
+        pm, players, bans, bus, clock=clock, telemetry_enabled=telemetry_enabled
+    )
     supervisor.poll_interval = 0
-    runtime = LifecycleRuntime(supervisor, client, pm)
+    runtime = LifecycleRuntime(
+        supervisor, client, pm, telemetry_enabled=telemetry_enabled
+    )
     yield runtime, supervisor, client, pm, bus
     runtime.close()
 
 
 class TestLifecycleRuntime:
+    @pytest.mark.parametrize("runtime_env", [True], indirect=True)
+    def test_blocked_telemetry_does_not_delay_roster_polling(self, runtime_env):
+        runtime, supervisor, client, pm, _bus = runtime_env
+        entered = threading.Event()
+        release = threading.Event()
+
+        def get_server_uptime():
+            entered.set()
+            release.wait(5)
+            return 90
+
+        client.get_server_version = lambda: "v1.0.4"
+        client.get_server_uptime = get_server_uptime
+        pm.found = ProcessIdentity(1001, 10.0)
+        pm.alive.add(pm.found.pid)
+        runtime.start()
+        try:
+            assert entered.wait(2)
+            client.players = [["Astra", "uid1", "111", "10"]]
+            wait_until(lambda: supervisor.get_snapshot()["playerCount"] == 1)
+            assert supervisor.get_snapshot()["uptimeSeconds"] is None
+        finally:
+            release.set()
+        wait_until(lambda: supervisor.get_snapshot()["uptimeSeconds"] == 90)
+        assert supervisor.get_snapshot()["palServerVersion"] == "v1.0.4"
+        runtime.close()
+        assert not any(t.name == "palworld-telemetry" for t in threading.enumerate())
+
     def test_starts_only_four_threads(self, runtime_env):
         runtime, _supervisor, _client, _pm, _bus = runtime_env
         runtime.start()

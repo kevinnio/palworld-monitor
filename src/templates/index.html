@@ -1,97 +1,79 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
+{% block head %}<meta name="csrf-token" content="{{ csrf_token() }}">{% endblock %}
+{% block header_actions %}
+<form method="POST" action="{{ url_for('logout') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn">{{ icon('logout') }} Logout</button>
+</form>
+{% endblock %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Palworld Dedicated Server</title>
-
-    <!-- External Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap" rel="stylesheet">
-
-    <!-- Stylesheets and Scripts -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
-    <meta name="csrf-token" content="{{ csrf_token() }}">
-</head>
-
-<body data-theme="{{ initialTheme }}">
-    <button id="themeToggle" class="theme-toggle" onclick="toggleTheme()">
-        <span class="icon">🌙</span>
-    </button>
-
-    <img src="{{ url_for('static', filename='Sunglasses_Cattiva.webp') }}" alt="Cattiva" class="cattiva-image">
-
-    <!-- Logout Button -->
-    <form method="POST" action="{{ url_for('logout') }}"
-        style="position: fixed; top: 70px; right: 20px; z-index: 1000;">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn" style="padding: 6px 12px; font-size: 14px;">Logout</button>
-    </form>
-
-    <!-- Server Status Section -->
-    <h1>
-        Server Status:
-        <span id="serverStatusText" class="status-on" style="display: none;">ON</span>
-        <span id="serverStatusText" class="status-off" style="display: none;">OFF</span>
-        <span id="serverStateText" class="status-transitional" style="display: none;"></span>
-    </h1>
-
-    <!-- Action Buttons Section -->
-    {% if controlServerThroughWeb %}
-    <div class="btnContainer">
-        <!-- Status Update Button -->
-        <button id="getStatusBtn" class="btn" title="Refresh server status and player information"
-            onclick="handleServerAction('getStatus')">
-            Update Server Status
-        </button>
-
-        <!-- Server Stop Button -->
-        <button id="offBtn" class="btn" {% if data.state != 'RUNNING' %}style="display:none;" {% endif %}
-            onclick="confirmAndHandleServerAction('stopServer')">
-            Stop Server
-        </button>
-
-        <!-- Server Start Button -->
-        <button id="onBtn" class="btn" {% if data.state != 'STOPPED' %}style="display:none;" {% endif %}
-            onclick="handleServerAction('startServer')">
-            Start Server
-        </button>
-    </div>
-    {% endif %}
-
-    <!-- Player Information -->
-    <h2>Players:</h2>
-    <div id="playerDataStatus" class="player-data-status" style="display: none;"></div>
-    <div id="playersInfo">- Loading...</div>
-
-    <!-- Auto-Stop Information -->
-    {% if autoStopEnabled %}
-    <div id="autoStopNotice" style="margin-top: 30px;{% if data.state != 'RUNNING' %} display: none;{% endif %}">
-        Notice: If there are no players online, the server will automatically stop after
-        <span id="ServerAutoOffTime">{{ autoStopDelay }}</span> seconds.
-    </div>
-    {% endif %}
-
-    {% if showServerIPAddress %}
-    <div style="margin-top:30px;">
-        Server IP: <span id="IP">{{ data.IPAddress }}</span>
-    </div>
-    {% endif %}
-
-    <!-- Footer -->
-    <div id="footer">
-        <div class="footer-small-text" id="lastUpdatedContainer">
-            Last Updated: <span id="lastUpdatedText">None</span>
+{% block content %}
+{% set state = data.state %}
+<main class="shell dashboard">
+    <section class="hero" aria-labelledby="dashboardTitle">
+        <div class="hero-copy">
+            <div class="hero-label">{{ icon('pulse') }} DEDICATED SERVER</div>
+            <h1 id="dashboardTitle">Dashboard</h1>
+            <div class="hero-controls">
+                <div class="server-badge" role="status" aria-label="Server status">
+                    <span id="serverStatusOn" class="status-on"{% if state != 'RUNNING' %} style="display: none;"{% endif %}>Online</span>
+                    <span id="serverStatusOff" class="status-off"{% if state != 'STOPPED' %} style="display: none;"{% endif %}>Offline</span>
+                    <span id="serverStateText" class="status-transitional"{% if state not in ('STARTING', 'STOPPING') %} style="display: none;"{% endif %}>{{ state|capitalize }}</span>
+                </div>
+                {% if controlServerThroughWeb %}
+                <button id="onBtn" class="btn btn-primary" {% if state != 'STOPPED' %}style="display: none;"{% endif %}
+                    onclick="handleServerAction('startServer')">{{ icon('power') }} Start Server</button>
+                <button id="offBtn" class="btn hero-btn" {% if state != 'RUNNING' %}style="display: none;"{% endif %}
+                    onclick="confirmAndHandleServerAction('stopServer')">{{ icon('power') }} Stop Server</button>
+                {% endif %}
+            </div>
         </div>
-        {% if git_hash %}
-        <div class="footer-small-text" id="gitHashContainer">
-            Version: <span id="gitHashText">{{ git_hash }}</span>
+        <div class="hero-art">
+            <img class="mascot" src="{{ url_for('static', filename='Sunglasses_Cattiva.webp') }}" alt="" width="408" height="608">
         </div>
-        {% endif %}
-    </div>
-</body>
+    </section>
 
-</html>
+    <div class="dashboard-grid">
+        <section class="panel roster" aria-labelledby="rosterTitle">
+            <div class="panel-heading">
+                <span class="tile-icon">{{ icon('players') }}</span>
+                <h2 class="panel-title" id="rosterTitle">Player roster</h2>
+                <span class="count-label" id="onlineCount">— online</span>
+            </div>
+            <p id="playerDataStatus" class="player-data-status" role="status" style="display: none;"></p>
+            <p id="moderationFeedback" class="action-feedback" role="status"></p>
+            <div id="playersInfo" tabindex="-1"><p class="empty-roster">Loading player roster…</p></div>
+        </section>
+
+        <aside class="panel station" aria-labelledby="stationTitle">
+            <div class="panel-heading">
+                <span class="tile-icon">{{ icon('signal') }}</span>
+                <h2 class="panel-title" id="stationTitle">Server details</h2>
+            </div>
+            <div class="station-body">
+                <dl class="station-list">
+                    <div><dt>Live updates</dt><dd id="streamStatus" data-connection="pending" role="status">Connecting</dd></div>
+                    <div><dt>Last updated</dt><dd id="lastUpdatedText">—</dd></div>
+                    {% if showServerIPAddress %}
+                    <div><dt>Server IP</dt><dd id="IP">{{ data.IPAddress }}</dd></div>
+                    {% endif %}
+                    <div><dt>PalServer version</dt><dd id="palServerVersion">{{ data.palServerVersion or '—' }}</dd></div>
+                    <div><dt>Uptime</dt><dd id="uptime">{% if data.uptimeSeconds is defined and data.uptimeSeconds is not none %}{{ data.uptimeSeconds }}s{% else %}—{% endif %}</dd></div>
+                    <div><dt>Monitor version</dt><dd id="monitorVersion">{{ monitor_version or '—' }}</dd></div>
+                </dl>
+                {% if controlServerThroughWeb %}
+                <button id="getStatusBtn" class="btn refresh-btn" title="Refresh server status and player information"
+                    onclick="handleServerAction('getStatus')">{{ icon('refresh') }} Update Server Status</button>
+                {% endif %}
+                <p id="actionFeedback" class="action-feedback" role="status"></p>
+                {% if autoStopEnabled %}
+                <p id="autoStopNotice" class="auto-stop"{% if state != 'RUNNING' %} style="display: none;"{% endif %}>
+                    {{ icon('timer') }} <span>Auto-stop after <strong id="ServerAutoOffTime">{{ autoStopDelay }}</strong> seconds with no players online.</span>
+                </p>
+                {% endif %}
+                <div class="bug-report-row">{{ report_bug_link(bug_report_url) }}</div>
+            </div>
+        </aside>
+    </div>
+</main>
+{% endblock %}

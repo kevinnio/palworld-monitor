@@ -8,6 +8,9 @@ monitoring and control. It must run on the same host as the server (your PC,
 the same VM, the same Docker container, etc.) so it can launch and signal the
 game process.
 
+**Mobile-ready dashboard:** Check server status, start or stop the server, and
+manage players from your phone or desktop. [See both layouts in dark mode](#dashboard-screenshots).
+
 ## Setup
 
 1. Download from the latest [GitHub Release](https://github.com/kevinnio/palworld-monitor/releases):
@@ -28,8 +31,27 @@ uv run poe start    # same interactive first-run setup
 ## Using the dashboard
 
 - Watch server state and players: name, Steam ID, level, online/offline.
+- See the running PalServer version and uptime. Monitor version shows the
+  monitor's release tag, or its short commit hash for an untagged build.
 - Start or stop the server manually.
 - Kick, ban or unban players, including bans already stored by PalServer.
+
+### Dashboard screenshots
+
+**Desktop**
+
+![Dark-mode desktop dashboard with a player roster and server details side by side](assets/dashboard-desktop-dark.webp)
+
+**Mobile**
+
+<img src="assets/dashboard-mobile-dark.webp" width="360" alt="Dark-mode mobile dashboard with stacked player cards, touch-friendly moderation controls, and server details">
+
+## Reporting a bug
+
+[Report a bug on GitHub](https://github.com/kevinnio/palworld-monitor/issues/new?template=bug_report.yml).
+The dashboard and login page also link to the form and prefill the monitor
+version when available. Reports are public; redact sensitive information before
+sharing any logs or screenshots.
 
 ## Configuration
 

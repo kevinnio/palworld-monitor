@@ -103,8 +103,8 @@ def logged_in_page(page: Page, app_process):
     page.locator("button[type='submit']").click(timeout=10000)
     page.wait_for_url(f"{BASE_URL}/", timeout=15000)
 
-    expect(page.locator("text=Server Status:")).to_be_visible()
-    expect(page.locator("text=Players:")).to_be_visible()
+    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Player roster")).to_be_visible()
     return page
 
 
@@ -168,14 +168,12 @@ def test_player_management(logged_in_page):
     expect(logged_in_page.locator(".status-online")).to_have_count(3, timeout=30000)
 
     # Kick TestPlayer1.
-    logged_in_page.locator("text=TestPlayer1").locator("..").locator(".kick-btn").click(
-        timeout=5000
-    )
+    logged_in_page.get_by_role("button", name="Kick TestPlayer1").click(timeout=5000)
     # Wait for the next poll cycle to pick up the change.
     expect(logged_in_page.locator(".status-online")).to_have_count(2, timeout=30000)
 
     # Ban TestPlayer2 and confirm the ban reaches the server's banlist.
-    player_row = logged_in_page.locator("text=TestPlayer2").locator("..")
+    player_row = logged_in_page.get_by_role("row").filter(has_text="TestPlayer2")
     player_row.locator(".ban-btn").click(timeout=5000)
     expect(logged_in_page.locator(".status-online")).to_have_count(1, timeout=30000)
     expect(player_row.locator(".status-banned")).to_have_count(1, timeout=30000)

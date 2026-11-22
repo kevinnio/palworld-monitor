@@ -152,13 +152,12 @@ On Windows the venv `python.exe` shim spawns a real uv-python child. Two
 
 ## Browser dialogs
 
-Kick, ban, and stop use `confirm()` and then `alert()`. Native modals block
-browser automation. Before using those buttons, run page JS:
+Kick, ban, unban, and stop use `confirm()`. Moderation results appear inline.
+Use the browser tool's dialog handling, or override `confirm()` in page JS
+before using the buttons:
 
 ```js
-window.__qaAlerts = [];
 window.confirm = () => true;
-window.alert = (message) => window.__qaAlerts.push(String(message));
 ```
 
 Alternatively, use the page's own fetch/API path with the CSRF token from

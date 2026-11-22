@@ -1,4 +1,4 @@
-"""Lifecycle supervisor: the only writer of lifecycle, roster and auto-stop state.
+"""Lifecycle supervisor: the only writer of lifecycle, roster, telemetry and auto-stop state.
 
 Message handling is synchronous. The runtime calls ``handle``/``on_tick`` only
 from its single lifecycle thread; this module owns no threads or queues.
@@ -25,6 +25,8 @@ from src.lifecycle.messages import (
     StopCommand,
     StopRequest,
     StopResult,
+    TelemetryRequest,
+    TelemetrySample,
 )
 from src.player_manager import PlayerManager
 from src.settings import settings
@@ -38,6 +40,8 @@ class Supervisor:
         banlist_manager: BanlistManager,
         bus: EventBus,
         clock=None,
+        *,
+        telemetry_enabled=False,
     ):
         self.process_manager = process_manager
         self.player_manager = player_manager
@@ -63,6 +67,11 @@ class Supervisor:
         self._poll_due_at: Optional[float] = None
         self._poll_inflight = False
         self._poll_seq = 0
+        self._telemetry_enabled = telemetry_enabled
+        self._telemetry_due_at: Optional[float] = None
+        self._telemetry_seq = 0
+        self._server_version: Optional[str] = None
+        self._uptime_seconds: Optional[int] = None
 
     # ------------------------------------------------------------------
     # Public read access
@@ -84,7 +93,7 @@ class Supervisor:
             return self._auto_stop.deadline
 
     def get_snapshot(self) -> dict:
-        """One consistent view of lifecycle, roster and REST health."""
+        """One consistent view of lifecycle, roster and server telemetry."""
         with self._state_lock:
             return {
                 "revision": self._revision,
@@ -93,6 +102,8 @@ class Supervisor:
                 "playerCount": self.player_manager.get_player_count(),
                 "players": self.player_manager.get_all_players(),
                 "banned_players": list(self.banlist_manager.get_banned_players()),
+                "palServerVersion": self._server_version,
+                "uptimeSeconds": self._uptime_seconds,
             }
 
     # ------------------------------------------------------------------
@@ -112,6 +123,8 @@ class Supervisor:
             return self._handle_process_observation(item)
         if isinstance(item, RosterSample):
             return self._handle_roster_sample(item)
+        if isinstance(item, TelemetrySample):
+            return self._handle_telemetry_sample(item)
         logging.warning(f"Ignoring unknown lifecycle observation: {item!r}")
         return []
 
@@ -123,6 +136,8 @@ class Supervisor:
             deadlines = []
             if self._poll_due_at is not None and not self._poll_inflight:
                 deadlines.append(self._poll_due_at)
+            if self._telemetry_due_at is not None:
+                deadlines.append(self._telemetry_due_at)
             if self._auto_stop.deadline is not None:
                 deadlines.append(self._auto_stop.deadline)
         if not deadlines:
@@ -148,10 +163,24 @@ class Supervisor:
                 self._poll_inflight = True
                 self._poll_due_at = None
                 self._poll_seq += 1
-                seq = self._poll_seq
+                requests.append(PollRequest(generation, identity, self._poll_seq))
+            if (
+                state == LifecycleState.RUNNING
+                and identity is not None
+                and self._telemetry_due_at is not None
+                and now >= self._telemetry_due_at
+            ):
+                self._telemetry_due_at = None  # request in flight
+                self._telemetry_seq += 1
+                requests.append(
+                    TelemetryRequest(
+                        generation,
+                        identity,
+                        self._telemetry_seq,
+                        self._server_version is None,
+                    )
+                )
             auto_stop_due = self._auto_stop.deadline
-        if should_poll:
-            requests.append(PollRequest(generation, identity, seq))
         if auto_stop_due is not None and now >= auto_stop_due:
             requests.extend(self._expire_auto_stop(generation))
         return requests
@@ -231,6 +260,8 @@ class Supervisor:
         self._auto_stop = auto_stop.cancelled(self._auto_stop)
         self._poll_due_at = None
         self._poll_inflight = False
+        self._telemetry_due_at = None
+        self._telemetry_seq += 1  # invalidate any request interrupted by this stop
         return StopRequest(self._generation, identity)
 
     def _begin_stop(self) -> list:
@@ -280,6 +311,7 @@ class Supervisor:
             self._state = LifecycleState.RUNNING
             self._poll_due_at = self._clock()
             self._poll_inflight = False
+            self._telemetry_due_at = self._clock() if self._telemetry_enabled else None
             generation = self._generation
         logging.warning(
             "Stop failed while the process is still alive; resuming polling"
@@ -389,6 +421,29 @@ class Supervisor:
             return self._begin_stop()
         return []
 
+    def _handle_telemetry_sample(self, sample: TelemetrySample) -> list:
+        request = sample.request
+        with self._state_lock:
+            if (
+                self._state != LifecycleState.RUNNING
+                or request.generation != self._generation
+                or request.seq != self._telemetry_seq
+                or self._identity is None
+                or not self._identity.matches(request.identity)
+            ):
+                return []
+            self._telemetry_due_at = self._clock() + 30
+            version = sample.version or self._server_version
+            if (version, sample.uptime_seconds) == (
+                self._server_version,
+                self._uptime_seconds,
+            ):
+                return []
+            self._server_version = version
+            self._uptime_seconds = sample.uptime_seconds
+        self._publish_status(LifecycleState.RUNNING, request.generation)
+        return []
+
     # ------------------------------------------------------------------
     # State commits
     # ------------------------------------------------------------------
@@ -453,6 +508,11 @@ class Supervisor:
             self._stopped_reconciled = False
             self._auto_stop = auto_stop.AutoStopState()
             self.last_server_started_time = self._clock()
+            self._server_version = None
+            self._uptime_seconds = None
+            self._telemetry_due_at = (
+                self.last_server_started_time if self._telemetry_enabled else None
+            )
             self._poll_due_at = self._clock()
             self._poll_inflight = False
             generation = self._generation
@@ -480,6 +540,9 @@ class Supervisor:
             self._poll_due_at = None
             self._poll_inflight = False
             self.player_manager.mark_all_offline()
+            self._server_version = None
+            self._uptime_seconds = None
+            self._telemetry_due_at = None
             generation = self._generation
             revision = self._bump_revision_locked()
         if stopped is not None:

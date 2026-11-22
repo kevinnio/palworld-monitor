@@ -16,6 +16,8 @@ from src.lifecycle.messages import (
     RosterSample,
     StopRequest,
     StopResult,
+    TelemetryRequest,
+    TelemetrySample,
 )
 from src.lifecycle.supervisor import Supervisor
 from src.settings import settings
@@ -28,7 +30,14 @@ _PROCESS_WORKER_JOIN_TIMEOUT = 150
 
 
 class LifecycleRuntime:
-    def __init__(self, supervisor: Supervisor, client, process_manager):
+    def __init__(
+        self,
+        supervisor: Supervisor,
+        client,
+        process_manager,
+        *,
+        telemetry_enabled=False,
+    ):
         self.supervisor = supervisor
         self.client = client
         self.process_manager = process_manager
@@ -36,6 +45,8 @@ class LifecycleRuntime:
         self._observations: queue.Queue = queue.Queue()
         self._poll_requests: queue.Queue = queue.Queue()
         self._process_requests: queue.Queue = queue.Queue()
+        self._telemetry_requests: queue.Queue = queue.Queue()
+        self._telemetry_enabled = telemetry_enabled
 
         self._closing = threading.Event()
         self._started = False
@@ -61,6 +72,7 @@ class LifecycleRuntime:
                 self._observations,
                 self._poll_requests,
                 self._process_requests,
+                self._telemetry_requests,
             ):
                 for _ in range(requests.qsize()):
                     request = requests.get_nowait()
@@ -87,6 +99,12 @@ class LifecycleRuntime:
                     target=self._process_worker, name="palworld-process", daemon=True
                 ),
             }
+            if self._telemetry_enabled:
+                self._threads["palworld-telemetry"] = threading.Thread(
+                    target=self._telemetry_worker,
+                    name="palworld-telemetry",
+                    daemon=True,
+                )
             for thread in self._threads.values():
                 thread.start()
 
@@ -100,6 +118,8 @@ class LifecycleRuntime:
             self._observations.put(_SHUTDOWN)
             for requests in (self._poll_requests, self._process_requests):
                 requests.put(_SHUTDOWN)
+            if self._telemetry_enabled:
+                self._telemetry_requests.put(_SHUTDOWN)
             threads = list(self._threads.items())
 
         for name, thread in threads:
@@ -157,6 +177,8 @@ class LifecycleRuntime:
     def _dispatch(self, request):
         if isinstance(request, PollRequest):
             self._poll_requests.put(request)
+        elif isinstance(request, TelemetryRequest):
+            self._telemetry_requests.put(request)
         elif isinstance(request, (LaunchRequest, StopRequest)):
             self._process_requests.put(request)
         else:
@@ -220,3 +242,25 @@ class LifecycleRuntime:
                 self._observations.put(
                     StopResult(request.generation, request.identity, stopped)
                 )
+
+    def _telemetry_worker(self):
+        while not self._closing.is_set():
+            request = self._telemetry_requests.get()
+            if request is _SHUTDOWN or self._closing.is_set():
+                break
+            if request.generation != self.supervisor.generation:
+                continue
+            version = None
+            if request.needs_version:
+                try:
+                    version = self.client.get_server_version()
+                except Exception:
+                    logging.exception("Server version request failed")
+            if self._closing.is_set():
+                break
+            try:
+                uptime = self.client.get_server_uptime()
+            except Exception:
+                logging.exception("Server uptime request failed")
+                uptime = None
+            self._observations.put(TelemetrySample(request, version, uptime))
