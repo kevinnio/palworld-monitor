@@ -215,13 +215,20 @@ class TestBanlistManager:
         finally:
             cleanup_temp_file(temp_file_path)
 
-    def test_get_banned_players_nonexistent_file(self):
+    def test_get_banned_players_nonexistent_file(self, tmp_path):
         """Test reading from nonexistent banlist file."""
         manager = BanlistManager(
-            bus=EventBus(), banlist_path="/nonexistent/path/banlist.txt"
+            bus=EventBus(), banlist_path=str(tmp_path / "missing" / "banlist.txt")
         )
         banned_ids = manager.get_banned_players()
         assert banned_ids == []
+
+    def test_banlist_access_probe_does_not_retry_permission_error(self, tmp_path):
+        path = tmp_path / "banlist.txt"
+        with patch("src.banlist_manager.os.open", side_effect=PermissionError) as open_file:
+            assert BanlistManager._is_writable(str(path)) is False
+        open_file.assert_called_once()
+        assert list(tmp_path.iterdir()) == []
 
     def test_add_ban(self, banlist_manager):
         """Test adding a Steam ID to banlist."""

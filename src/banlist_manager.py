@@ -4,6 +4,7 @@ import logging
 import threading
 import tempfile
 import getpass
+from uuid import uuid4
 from src.settings import settings
 from src.events import EventBus, Event
 
@@ -112,11 +113,18 @@ class BanlistManager:
                 return False
             directory = parent
 
+        # On Windows tempfile can retry PermissionError when os.access reports
+        # that a directory is writable despite its ACL. Probe only once.
+        probe = os.path.join(directory, f".palworld-monitor-{uuid4().hex}.tmp")
         try:
-            with tempfile.NamedTemporaryFile(dir=directory):
-                return True
+            fd = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.close(fd)
+            finally:
+                os.unlink(probe)
         except OSError:
             return False
+        return True
 
     @staticmethod
     def _current_user():
