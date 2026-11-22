@@ -53,7 +53,8 @@ The dashboard and login page also link to the form and prefill the monitor
 version when available. Reports are public; redact sensitive information before
 sharing any logs or screenshots.
 
-## Configuration
+<details>
+<summary>Configuration</summary>
 
 After first run, a `settings.yaml` file is saved next to the app — the folder
 holding `palworld-monitor.exe`, the project root when running from source. You
@@ -103,10 +104,9 @@ CLI flag too (run with `--help`); the `logging.*` settings are file-only.
 
 ### Logs
 
-The app keeps its logs in a `logs` folder inside its app folder (see
-[Configuration](#configuration)): next to the app itself in a release, the
-project root when running from source. The console shows the same log lines, so
-under systemd `journalctl` works too.
+The app keeps its logs in a `logs` folder inside its app folder: next to the
+app itself in a release, the project root when running from source. The console
+shows the same log lines, so under systemd `journalctl` works too.
 
 Nothing to maintain: history is kept across restarts, old entries are
 compressed and pruned on their own (at startup, on each rotation, and hourly),
@@ -114,7 +114,10 @@ and the folder stays small even after months unattended. Want more detail?
 Start with `LOG_LEVEL=DEBUG`. The table above covers the knobs if you want to
 keep logs longer, larger, or in a different folder.
 
-## LinuxGSM (LGSM) support
+</details>
+
+<details>
+<summary>LinuxGSM (LGSM) support</summary>
 
 If your server is managed by [LinuxGSM](https://linuxgsm.com/lgsm/pwserver/)
 rather than a bare `PalServer.sh`, set `useLGSM: true` and point `exePath` at
@@ -139,7 +142,10 @@ with `--app-dir /home/gameserver/pwserver` and its settings, logs, player data,
 and pid files all live with that instance. LGSM's own `log/` folder is
 untouched.
 
-## Running as a service (Linux)
+</details>
+
+<details>
+<summary>Running as a service (Linux)</summary>
 
 To survive reboots and restart on crashes, run it under systemd. An example unit
 is provided at [`deploy/palworld-monitor.service`](deploy/palworld-monitor.service).
@@ -167,7 +173,10 @@ folder holding the binary unless you pass `--app-dir`, so `WorkingDirectory`
 no longer decides where they land. Add `--app-dir /home/gameserver/pwserver`
 to `ExecStart` to keep them with an LGSM instance.
 
-## Manual PalServer setup (optional)
+</details>
+
+<details>
+<summary>Manual PalServer setup (optional)</summary>
 
 The app auto-configures your PalServer on first run. This section is only needed
 if auto-setup fails or you prefer to configure it yourself.
@@ -199,6 +208,8 @@ C:\Program Files\PalServer\Pal\Saved\Config\WindowsServer\PalWorldSettings.ini
 
 If `PalWorldSettings.ini` doesn't exist, copy `DefaultPalWorldSettings.ini`
 from the same folder and rename it.
+</details>
+
 </details>
 
 ## License
