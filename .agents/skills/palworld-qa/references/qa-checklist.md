@@ -55,7 +55,8 @@ Run the ones matching changed areas, plus at least two unrelated ones.
 | E27 | web/theme | Shared color preference | Cycle System, Dark and Light; navigate between login and dashboard; reload; change system appearance | Manual overrides carry across both pages and reloads; System follows device appearance |
 | E28 | web/SSE | Connection indicator and roster focus | Focus a moderation button and receive a fresh snapshot; interrupt and restore the stream | Focus stays on the equivalent button if still present; connection indicator reports loss and returns to Connected on a valid snapshot |
 | E29 | web/telemetry | Server details for the current run | Check the dashboard on a stopped server, then start, wait for REST, and restart | PalServer version comes from `/info` and uptime from `/metrics`; a new run starts with both unset, independent of the monitor version or player count |
-| E30 | telemetry/build | Monitor version | Open builds from a tagged and an untagged commit without Git on the host | Monitor version shows the build's exact release tag, otherwise its commit hash |
+| E30 | telemetry/build | Monitor version | Open builds from a tagged and an untagged commit without Git on the host | Monitor version shows the build's exact release tag, otherwise its short commit hash |
+| E31 | web/reporting | Bug report links | Inspect Report a bug on login and under Server details; check the README and the issue template | Both app links target the repository's `bug_report.yml` form in a new tab and send only the monitor version when known; the README links to the same form without a version; the form makes diagnostics optional and warns that reports are public |
 
 ## Change-sensitive map
 
@@ -66,6 +67,7 @@ When `qa_delta.py` reports an area, update and run the matching scenarios.
 | lifecycle, process control, auto-start/auto-stop | H2–H4, H8–H10, E1–E7, E11–E15 |
 | web server, templates, static JS/CSS | H1–H10, E7, E9, E26–E29 |
 | server telemetry, version metadata, build spec | E13, E29–E30 |
+| bug reporting links and issue form | E31 |
 | player/ban managers, REST client | H5–H7, E5, E10, E17–E20 |
 | settings, CLI, setup, main composition | H1–H3, H10, E3, E5, E6, E22–E25 |
 | docs only | no new browser scenario; spot-check the affected instructions |
