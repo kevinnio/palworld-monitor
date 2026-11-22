@@ -19,6 +19,8 @@ class PalWorldController:
         banlist_manager: BanlistManager,
         bus: EventBus,
         clock=None,
+        *,
+        telemetry_enabled=False,
     ):
         self.client = client
         self.process_manager = process_manager
@@ -31,11 +33,13 @@ class PalWorldController:
             banlist_manager=banlist_manager,
             bus=bus,
             clock=clock,
+            telemetry_enabled=telemetry_enabled,
         )
         self._runtime = LifecycleRuntime(
             supervisor=self._supervisor,
             client=client,
             process_manager=process_manager,
+            telemetry_enabled=telemetry_enabled,
         )
 
     def start(self):

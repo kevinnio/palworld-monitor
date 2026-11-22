@@ -57,9 +57,9 @@
                     {% if showServerIPAddress %}
                     <div><dt>Server IP</dt><dd id="IP">{{ data.IPAddress }}</dd></div>
                     {% endif %}
-                    {% if git_hash %}
-                    <div><dt>Version</dt><dd id="gitHashText">{{ git_hash }}</dd></div>
-                    {% endif %}
+                    <div><dt>PalServer version</dt><dd id="palServerVersion">{{ data.palServerVersion or '—' }}</dd></div>
+                    <div><dt>Uptime</dt><dd id="uptime">{% if data.uptimeSeconds is defined and data.uptimeSeconds is not none %}{{ data.uptimeSeconds }}s{% else %}—{% endif %}</dd></div>
+                    <div><dt>Monitor version</dt><dd id="monitorVersion">{{ monitor_version or '—' }}</dd></div>
                 </dl>
                 {% if controlServerThroughWeb %}
                 <button id="getStatusBtn" class="btn refresh-btn" title="Refresh server status and player information"

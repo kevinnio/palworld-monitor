@@ -21,6 +21,28 @@ def mock_http_response():
 class TestRestClient:
     """Test suite for RestClient."""
 
+    @pytest.mark.parametrize(
+        "payload,expected",
+        [({"version": " v1.0.4 "}, "v1.0.4"), ({"version": ""}, None), ([], None)],
+    )
+    def test_get_server_version(self, mock_settings, payload, expected):
+        client = RestClient()
+        with patch.object(client, "_make_get_request", return_value=payload) as get:
+            assert client.get_server_version() == expected
+        get.assert_called_once_with("info", timeout=2)
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [(0, 0), (12345, 12345), (-1, None), (True, None), ("42", None), (None, None)],
+    )
+    def test_get_server_uptime(self, mock_settings, value, expected):
+        client = RestClient()
+        with patch.object(
+            client, "_make_get_request", return_value={"uptime": value}
+        ) as get:
+            assert client.get_server_uptime() == expected
+        get.assert_called_once_with("metrics", timeout=2)
+
     def test_make_request_success(self, mock_settings, mock_http_response):
         """Test successful HTTP request returns expected data."""
         mock_http_response.content = b'{"success": true, "data": "test"}'

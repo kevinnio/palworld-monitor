@@ -136,6 +136,19 @@ class TestLogoutFlow:
 class TestIndexPageRendering:
     """Test suite for index/dashboard page rendering."""
 
+    def test_server_and_monitor_versions_are_separate(
+        self, auth_client, web_app_factory, monkeypatch
+    ):
+        monkeypatch.setattr("src.web_server.get_monitor_version", lambda: "v1.20")
+        snapshot = web_app_factory.palworld_controller.get_snapshot.return_value
+        snapshot.update(state="RUNNING", palServerVersion="v1.0.4", uptimeSeconds=0)
+
+        html = auth_client.get("/").get_data(as_text=True)
+
+        assert '<dt>PalServer version</dt><dd id="palServerVersion">v1.0.4</dd>' in html
+        assert '<dt>Monitor version</dt><dd id="monitorVersion">v1.20</dd>' in html
+        assert '<dt>Uptime</dt><dd id="uptime">0s</dd>' in html
+
     @pytest.mark.parametrize(
         "enabled,running", [(False, False), (False, True), (True, False), (True, True)]
     )

@@ -17,7 +17,6 @@ import math
 import os
 import re
 import shutil
-import subprocess
 import secrets
 
 PALWORLD_EXE_ARGUMENTS = (
@@ -340,31 +339,6 @@ class Settings:
             )
         elif log_dir and os.path.exists(log_dir) and not os.path.isdir(log_dir):
             errors.append(f"logDir is not a directory: {log_dir}")
-
-    def get_git_hash(self):
-        """Return the current git commit hash, read once per instance.
-
-        Tries to use `git rev-parse HEAD`. If git is not available or the command fails,
-        returns None.
-        """
-        if not hasattr(self, "_git_hash"):
-            self._git_hash = self._read_git_hash()
-        return self._git_hash
-
-    @staticmethod
-    def _read_git_hash():
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=os.path.dirname(__file__),
-                check=True,
-            )
-            return result.stdout.strip()
-        except Exception:
-            return None
 
 
 settings = Settings()

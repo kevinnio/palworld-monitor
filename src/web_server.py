@@ -34,6 +34,7 @@ from src.settings import settings
 from src.palworld_control import PalWorldController
 from src.events import EventBus, Event
 from src.auth import User, LoginAttemptTracker
+from src.version import get_monitor_version
 import logging
 import threading
 
@@ -366,7 +367,7 @@ class WebServer:
             autoStopEnabled=settings.autoStop,
             data=current_server_info,
             autoStopDelay=round(settings.autoStopDelay),
-            git_hash=settings.get_git_hash(),
+            monitor_version=get_monitor_version(),
             current_user=current_user,
         )
 

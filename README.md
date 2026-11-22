@@ -28,6 +28,8 @@ uv run poe start    # same interactive first-run setup
 ## Using the dashboard
 
 - Watch server state and players: name, Steam ID, level, online/offline.
+- See the running PalServer version and uptime. Monitor version shows the
+  monitor's release tag, or its short commit hash for an untagged build.
 - Start or stop the server manually.
 - Kick, ban or unban players, including bans already stored by PalServer.
 

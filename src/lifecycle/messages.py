@@ -75,6 +75,21 @@ class RosterSample:
 
 
 @dataclass(frozen=True)
+class TelemetryRequest:
+    generation: int
+    identity: ProcessIdentity
+    seq: int
+    needs_version: bool
+
+
+@dataclass(frozen=True)
+class TelemetrySample:
+    request: TelemetryRequest
+    version: Optional[str]
+    uptime_seconds: Optional[int]
+
+
+@dataclass(frozen=True)
 class StopRequest:
     generation: int
     identity: ProcessIdentity

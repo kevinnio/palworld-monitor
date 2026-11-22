@@ -24,11 +24,11 @@ class RestClient:
         self.headers = {"Content-Type": "application/json"}
         self.auth = HTTPBasicAuth("admin", settings.palworldServerAdminPassword)
 
-    def _make_get_request(self, endpoint):
+    def _make_get_request(self, endpoint, *, timeout=10):
         try:
             url = f"{self.base_url}/{endpoint}"
             response = requests.get(
-                url, headers=self.headers, auth=self.auth, timeout=10
+                url, headers=self.headers, auth=self.auth, timeout=timeout
             )
             response.raise_for_status()
             return response.json() if response.content else {}
@@ -61,6 +61,16 @@ class RestClient:
     def get_player_count(self):
         players = self.get_player_names()
         return len(players) if players is not None else None
+
+    def get_server_version(self) -> str | None:
+        info = self._make_get_request("info", timeout=2)
+        version = info.get("version") if isinstance(info, dict) else None
+        return (version.strip() or None) if isinstance(version, str) else None
+
+    def get_server_uptime(self) -> int | None:
+        metrics = self._make_get_request("metrics", timeout=2)
+        uptime = metrics.get("uptime") if isinstance(metrics, dict) else None
+        return uptime if type(uptime) is int and uptime >= 0 else None
 
     def get_player_names(self):
         try:

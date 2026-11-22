@@ -38,7 +38,7 @@ Run the ones matching changed areas, plus at least two unrelated ones.
 | E10 | bans | Ban persists across reload | Ban a player, reload `/` | Banned player still shows Banned/Unban after reload |
 | E11 | lifecycle | Rapid start/stop | Start, then stop as soon as RUNNING; start again after cooldown | Transitions remain ordered; no duplicate process; no stuck STARTING/STOPPING |
 | E12 | lifecycle | Failed stop recovery | Use a fake/forced termination failure or LGSM pending path if available | Failed stop returns to RUNNING and polling resumes; pending LGSM remains STOPPING until exit |
-| E13 | lifecycle/threads | Lean worker set | Inspect runtime thread names while stopped and running | Exactly four lifecycle threads: lifecycle, detection, poll, process; no separate launch/stop workers or LGSM watchdog |
+| E13 | lifecycle/threads | Lean worker set | Inspect runtime threads with and without the dashboard enabled | Four core lifecycle threads: lifecycle, detection, roster poll, process; one telemetry worker only with the dashboard enabled; no separate launch/stop workers or LGSM watchdog |
 | E14 | auto-start/threads | Listener re-arms without leaking | Repeat UDP start, dashboard stop, and UDP start after cooldown | One listener while STOPPED; none while RUNNING; starts succeed without duplicate listeners or processes |
 | E15 | lifecycle/threads | Blocked REST does not block control or detection | Inject a blocked REST poll; stop or crash the dummy before it returns | STOPPING/STOPPED commits remain responsive; late roster cannot revive players or regress state |
 | E16 | QA cleanup | No dummy servers left behind | After QA, stop the owned monitor and all verified dummy processes, including pre-existing leftovers and launcher children; rescan processes and ports | Zero dummy processes; no QA-owned TCP/UDP listeners; unrelated processes untouched |
@@ -54,6 +54,8 @@ Run the ones matching changed areas, plus at least two unrelated ones.
 | E26 | web/layout | Phone and desktop layouts | Open login and a populated dashboard at 320–390 px and at desktop width; include a long player name and a ban-only Steam ID | Login and dashboard fit without sideways scrolling; mobile roster cards retain visible labels and reachable moderation controls; desktop shows a table beside server details |
 | E27 | web/theme | Shared color preference | Cycle System, Dark and Light; navigate between login and dashboard; reload; change system appearance | Manual overrides carry across both pages and reloads; System follows device appearance |
 | E28 | web/SSE | Connection indicator and roster focus | Focus a moderation button and receive a fresh snapshot; interrupt and restore the stream | Focus stays on the equivalent button if still present; connection indicator reports loss and returns to Connected on a valid snapshot |
+| E29 | web/telemetry | Server details for the current run | Check the dashboard on a stopped server, then start, wait for REST, and restart | PalServer version comes from `/info` and uptime from `/metrics`; a new run starts with both unset, independent of the monitor version or player count |
+| E30 | telemetry/build | Monitor version | Open builds from a tagged and an untagged commit without Git on the host | Monitor version shows the build's exact release tag, otherwise its commit hash |
 
 ## Change-sensitive map
 
@@ -62,7 +64,8 @@ When `qa_delta.py` reports an area, update and run the matching scenarios.
 | Changed area | Scenarios |
 |--------------|-----------|
 | lifecycle, process control, auto-start/auto-stop | H2–H4, H8–H10, E1–E7, E11–E15 |
-| web server, templates, static JS/CSS | H1–H10, E7, E9, E26–E28 |
+| web server, templates, static JS/CSS | H1–H10, E7, E9, E26–E29 |
+| server telemetry, version metadata, build spec | E13, E29–E30 |
 | player/ban managers, REST client | H5–H7, E5, E10, E17–E20 |
 | settings, CLI, setup, main composition | H1–H3, H10, E3, E5, E6, E22–E25 |
 | docs only | no new browser scenario; spot-check the affected instructions |

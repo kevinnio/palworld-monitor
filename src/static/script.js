@@ -29,7 +29,20 @@ function applySnapshot(data) {
     lastSnapshotRevision = revision;
     updateServerStatusUI(data.state);
     updatePlayerInfoUI(data);
+    byId('palServerVersion').textContent = data.palServerVersion || '—';
+    byId('uptime').textContent = formatUptime(data.uptimeSeconds);
     byId('lastUpdatedText').textContent = new Date().toLocaleTimeString();
+}
+
+function formatUptime(seconds) {
+    if (!Number.isInteger(seconds) || seconds < 0) return '—';
+    const parts = [];
+    for (const [size, label] of [[86400, 'd'], [3600, 'h'], [60, 'm'], [1, 's']]) {
+        const value = Math.floor(seconds / size);
+        if (value) parts.push(`${value}${label}`);
+        seconds %= size;
+    }
+    return parts.join(' ') || '0s';
 }
 
 function setVisible(id, visible) {
