@@ -11,8 +11,13 @@
     {% elif name == 'timer' %}<circle cx="12" cy="13" r="8"/><path d="M9 2h6m-3 7v4l3 2"/>
     {% elif name == 'signal' %}<path d="M5 20v-4m5 4v-8m5 8V8m5 12V4"/>
     {% elif name == 'arrow' %}<path d="M4 12h15m-6-6 6 6-6 6"/>
+    {% elif name == 'external' %}<path d="M13 5h6v6m0-6-9 9m7-1v6H5V7h6"/>
     {% endif %}
 </svg>
+{%- endmacro %}
+{%- macro report_bug_link(url) -%}
+<a class="bug-report-link" href="{{ url }}" target="_blank" rel="noopener noreferrer"
+    aria-label="Report a bug on GitHub (opens in a new tab)">Report a bug {{ icon('external') }}</a>
 {%- endmacro %}
 <html lang="en" data-theme="{{ request.cookies.get('theme') if request.cookies.get('theme') in ('light', 'dark') else 'system' }}">
 <head>

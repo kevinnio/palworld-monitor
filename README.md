@@ -33,6 +33,13 @@ uv run poe start    # same interactive first-run setup
 - Start or stop the server manually.
 - Kick, ban or unban players, including bans already stored by PalServer.
 
+## Reporting a bug
+
+[Report a bug on GitHub](https://github.com/kevinnio/palworld-monitor/issues/new?template=bug_report.yml).
+The dashboard and login page also link to the form and prefill the monitor
+version when available. Reports are public; redact sensitive information before
+sharing any logs or screenshots.
+
 ## Configuration
 
 After first run, a `settings.yaml` file is saved next to the app — the folder

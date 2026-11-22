@@ -6,6 +6,9 @@ including template rendering, session management, CSRF protection, and all API r
 Tests run in-process without needing an actual HTTP server or browser.
 """
 
+from html import unescape
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 
 
@@ -25,6 +28,26 @@ class TestLoginPageRendering:
         assert response.status_code == 200
         assert response.mimetype == "image/png"
         assert response.data.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+@pytest.mark.parametrize("path", ["/login", "/"])
+@pytest.mark.parametrize("version", [None, "v1.20+rc", "cfddaa1"])
+def test_bug_report_link_prefills_only_monitor_version(
+    auth_client, monkeypatch, path, version
+):
+    monkeypatch.setattr("src.web_server.get_monitor_version", lambda: version)
+    html = auth_client.get(path).get_data(as_text=True)
+    href = html.split('class="bug-report-link" href="', 1)[1].split('"', 1)[0]
+
+    url = urlsplit(unescape(href))
+    assert url.scheme == "https"
+    assert url.netloc == "github.com"
+    assert url.path == "/kevinnio/palworld-monitor/issues/new"
+    expected = {"template": ["bug_report.yml"]}
+    if version is not None:
+        expected["monitor-version"] = [version]
+    assert parse_qs(url.query) == expected
+    assert 'rel="noopener noreferrer"' in html
 
 
 class TestSuccessfulLoginFlow:

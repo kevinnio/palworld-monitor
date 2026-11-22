@@ -1,0 +1,37 @@
+name: Report a bug
+description: Tell us what isn't working in palword-monitor.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Bug reports are public. Remove passwords, tokens, server IP addresses, and player identifiers from anything you share.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Tell us what went wrong and what you expected to happen instead.
+      placeholder: I clicked Start Server. I expected the server to start, but the dashboard stayed Offline.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce (optional)
+      description: What did you do just before it happened? If you can't reproduce it, leave this blank.
+  - type: input
+    id: monitor-version
+    attributes:
+      label: Monitor version (optional)
+      description: Look under Server details on the dashboard.
+      placeholder: v1.20 or a short commit hash
+  - type: input
+    id: setup
+    attributes:
+      label: Setup (optional)
+      description: Include your OS and how you run the monitor, if you know.
+      placeholder: Windows 11, downloaded .exe; or Ubuntu, from source, PalServer via LinuxGSM
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots or logs (optional)
+      description: Attach a screenshot or paste a short excerpt around the error from the monitor's logs folder. Don't upload settings.yaml or a full log.

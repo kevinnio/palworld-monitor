@@ -18,6 +18,7 @@ import socket
 import json
 import queue
 import re
+from urllib.parse import urlencode
 from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
 from flask_login import (
     LoginManager,
@@ -37,6 +38,9 @@ from src.auth import User, LoginAttemptTracker
 from src.version import get_monitor_version
 import logging
 import threading
+
+
+BUG_REPORT_URL = "https://github.com/kevinnio/palworld-monitor/issues/new"
 
 
 class WebServer:
@@ -180,6 +184,17 @@ class WebServer:
 
     def _register_routes(self):
         """Register Flask routes with the application."""
+
+        @self.app.context_processor
+        def monitor_context():
+            version = get_monitor_version()
+            params = {"template": "bug_report.yml"}
+            if version:
+                params["monitor-version"] = version
+            return {
+                "monitor_version": version,
+                "bug_report_url": f"{BUG_REPORT_URL}?{urlencode(params)}",
+            }
 
         @self.app.route("/login", methods=["GET", "POST"])
         @self.csrf.exempt
@@ -367,7 +382,6 @@ class WebServer:
             autoStopEnabled=settings.autoStop,
             data=current_server_info,
             autoStopDelay=round(settings.autoStopDelay),
-            monitor_version=get_monitor_version(),
             current_user=current_user,
         )
 

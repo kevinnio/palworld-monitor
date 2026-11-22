@@ -151,6 +151,13 @@ button, input { font: inherit; }
 #streamStatus[data-connection="live"] { color: var(--accent); }
 #streamStatus[data-connection="pending"] { color: var(--warning); }
 .refresh-btn { margin-top: 15px; width: 100%; }
+.bug-report-row { margin-top: 12px; padding-top: 4px; border-top: 1px solid var(--line); }
+.bug-report-link {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 44px;
+    color: var(--accent); font-size: 13px; font-weight: 650; text-underline-offset: 3px;
+}
+.bug-report-link .icon { width: 15px; height: 15px; }
+.login-support { margin-top: 8px; text-align: center; }
 .auto-stop { display: flex; align-items: start; gap: 8px; color: var(--muted); margin-top: 15px; font-size: 13px; }
 .auto-stop .icon { color: var(--accent); }
 
