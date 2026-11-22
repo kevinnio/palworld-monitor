@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import sys
+
 a = Analysis(
     ["src/main.py"],
     pathex=[],
@@ -35,6 +37,7 @@ exe = EXE(
     a.datas,
     [],
     name="palworld-monitor",
+    icon="assets/cattiva.ico" if sys.platform == "win32" else None,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

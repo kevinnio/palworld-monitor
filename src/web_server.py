@@ -359,10 +359,6 @@ class WebServer:
         else:
             current_server_info["IPAddress"] = "Unknown"
 
-        theme = request.cookies.get("theme", "light")
-        if theme not in ["light", "dark"]:
-            theme = "light"
-
         return render_template(
             "index.html",
             controlServerThroughWeb=settings.controlServerThroughWeb,
@@ -370,7 +366,6 @@ class WebServer:
             autoStopEnabled=settings.autoStop,
             data=current_server_info,
             autoStopDelay=round(settings.autoStopDelay),
-            initialTheme=theme,
             git_hash=settings.get_git_hash(),
             current_user=current_user,
         )

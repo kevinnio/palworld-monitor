@@ -16,8 +16,15 @@ class TestLoginPageRendering:
         """GET /login renders the login template with no errors."""
         response = client.get("/login")
         assert response.status_code == 200
-        assert b"Palworld Server" in response.data
+        assert b"<title>palword-monitor</title>" in response.data
+        assert b'rel="icon" href="/static/cattiva-icon.png"' in response.data
         assert b"Admin Login" in response.data
+
+    def test_cattiva_icon_is_served_as_png(self, client):
+        response = client.get("/static/cattiva-icon.png")
+        assert response.status_code == 200
+        assert response.mimetype == "image/png"
+        assert response.data.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 class TestSuccessfulLoginFlow:
@@ -53,7 +60,8 @@ class TestSuccessfulLoginFlow:
         # Access protected route - should work without redirecting to login
         response = auth_client.get("/")
         assert response.status_code == 200
-        assert b"Palworld Dedicated Server" in response.data
+        assert b'id="dashboardTitle">Dashboard<' in response.data
+        assert b"<title>palword-monitor</title>" in response.data
 
 
 class TestFailedLoginFlow:
@@ -151,7 +159,7 @@ class TestIndexPageRendering:
         """GET / renders the dashboard with player data when authenticated."""
         response = auth_client.get("/")
         assert response.status_code == 200
-        assert b"Palworld Dedicated Server" in response.data
+        assert b'id="dashboardTitle">Dashboard<' in response.data
         # Should contain status indicators and action buttons
         assert b"Update Server Status" in response.data or b"getStatus" in response.data
 
@@ -169,8 +177,19 @@ class TestIndexPageRendering:
 
         html = auth_client.get("/").get_data(as_text=True)
 
-        assert "display:none" not in self._tag(html, visible)
-        assert "display:none" in self._tag(html, hidden)
+        assert "display: none" not in self._tag(html, visible)
+        assert "display: none" in self._tag(html, hidden)
+
+    @pytest.mark.parametrize("path", ["/", "/login"])
+    @pytest.mark.parametrize(
+        "cookie,theme", [("dark", "dark"), ("light", "light"), ("invalid", "system")]
+    )
+    def test_dashboard_and_login_share_theme_preference(
+        self, auth_client, path, cookie, theme
+    ):
+        auth_client.set_cookie("theme", cookie)
+        html = auth_client.get(path).get_data(as_text=True)
+        assert f'<html lang="en" data-theme="{theme}">' in html
 
     def test_dashboard_hides_controls_when_web_control_is_disabled(
         self, auth_client, mock_settings

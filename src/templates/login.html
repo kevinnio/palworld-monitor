@@ -1,277 +1,32 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Palworld Dedicated Server</title>
-
-    <!-- External Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
-
-    <!-- Stylesheets -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-
-    <style>
-        .login-container {
-            max-width: 400px;
-            margin: 100px auto;
-            padding: 40px;
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            box-shadow: 0 4px 12px var(--shadow-color);
-        }
-
-        .login-header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-
-        .login-header h1 {
-            font-size: 32px;
-            margin-bottom: 10px;
-            color: var(--text-primary);
-        }
-
-        .login-header p {
-            font-size: 16px;
-            color: var(--text-secondary);
-            margin: 0;
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        .form-group label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 600;
-            color: var(--text-primary);
-            font-size: 16px;
-        }
-
-        .form-group input[type="text"],
-        .form-group input[type="password"] {
-            width: 100%;
-            padding: 12px 16px;
-            font-size: 16px;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            background-color: var(--bg-primary);
-            color: var(--text-primary);
-            box-sizing: border-box;
-            transition: border-color 0.3s ease;
-            font-family: "Poppins", sans-serif;
-        }
-
-        .form-group input[type="text"]:focus,
-        .form-group input[type="password"]:focus {
-            outline: none;
-            border-color: var(--link-color);
-        }
-
-        .form-group input[type="checkbox"] {
-            margin-right: 8px;
-            cursor: pointer;
-        }
-
-        .remember-me {
-            display: flex;
-            align-items: center;
-            font-size: 14px;
-            color: var(--text-secondary);
-        }
-
-        .remember-me label {
-            margin: 0;
-            cursor: pointer;
-            font-weight: 400;
-        }
-
-        .login-btn {
-            width: 100%;
-            padding: 14px;
-            font-size: 18px;
-            font-weight: 600;
-            background-color: var(--link-color);
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: background-color 0.3s ease, transform 0.1s ease;
-            font-family: "Poppins", sans-serif;
-        }
-
-        .login-btn:hover {
-            background-color: var(--link-hover);
-            transform: translateY(-1px);
-        }
-
-        .login-btn:active {
-            transform: translateY(0);
-        }
-
-        .login-btn:disabled {
-            background-color: var(--button-bg);
-            color: var(--text-muted);
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .error-message {
-            background-color: #ff3b30;
-            color: white;
-            padding: 12px 16px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            text-align: center;
-        }
-
-        .warning-message {
-            background-color: #ff9500;
-            color: white;
-            padding: 12px 16px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            text-align: center;
-        }
-
-        .info-message {
-            background-color: var(--link-color);
-            color: white;
-            padding: 12px 16px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            text-align: center;
-        }
-
-        .cattiva-login {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 150px;
-            height: auto;
-            opacity: 0.2;
-            z-index: -1;
-        }
-
-        @media (max-width: 768px) {
-            .login-container {
-                margin: 50px 20px;
-                padding: 30px 20px;
-            }
-
-            .login-header h1 {
-                font-size: 28px;
-            }
-
-            .cattiva-login {
-                width: 100px;
-            }
-        }
-    </style>
-</head>
-
-<body>
-    <button id="themeToggle" class="theme-toggle" onclick="toggleTheme()">
-        <span class="icon">🌙</span>
-    </button>
-
-    <img src="{{ url_for('static', filename='Sunglasses_Cattiva.webp') }}" alt="Cattiva" class="cattiva-login">
-
-    <div class="login-container">
-        <div class="login-header">
-            <h1>🎮 Palworld Server</h1>
-            <p>Admin Login</p>
+{% block content %}
+<main class="shell login-shell">
+    <div class="login-layout">
+        <div class="login-art">
+            <img class="mascot" src="{{ url_for('static', filename='Sunglasses_Cattiva.webp') }}" alt="" width="408" height="608">
         </div>
-
-        {% if error %}
-        <div class="error-message">
-            {{ error }}
-        </div>
-        {% endif %}
-
-        {% if warning %}
-        <div class="warning-message">
-            {{ warning }}
-        </div>
-        {% endif %}
-
-        {% if info %}
-        <div class="info-message">
-            {{ info }}
-        </div>
-        {% endif %}
-
-        <form method="POST" action="{{ url_for('login') }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-
-            <div class="form-group">
-                <label for="username">Username</label>
-                <input type="text" id="username" name="username" required autofocus autocomplete="username">
-            </div>
-
-            <div class="form-group">
-                <label for="password">Password</label>
-                <input type="password" id="password" name="password" required autocomplete="current-password">
-            </div>
-
-            <div class="form-group remember-me">
-                <input type="checkbox" id="remember" name="remember" value="yes">
-                <label for="remember">Remember me for 7 days</label>
-            </div>
-
-            <button type="submit" class="login-btn" {% if locked_out %}disabled{% endif %}>
-                {% if locked_out %}
-                Locked Out
-                {% else %}
-                Login
-                {% endif %}
-            </button>
-        </form>
+        <section class="login-form" aria-labelledby="loginTitle">
+            <h1 id="loginTitle">Admin Login</h1>
+            {% if error %}<p class="form-message error-message" role="alert">{{ error }}</p>{% endif %}
+            {% if warning %}<p class="form-message warning-message" role="alert">{{ warning }}</p>{% endif %}
+            {% if info %}<p class="form-message info-message" role="status">{{ info }}</p>{% endif %}
+            <form method="POST" action="{{ url_for('login') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required autocomplete="current-password">
+                </div>
+                <label class="remember-me"><input type="checkbox" id="remember" name="remember" value="yes"> Remember me for 7 days</label>
+                <button type="submit" class="btn btn-primary login-btn" {% if locked_out %}disabled{% endif %}>
+                    {% if locked_out %}Locked Out{% else %}Login {{ icon('arrow') }}{% endif %}
+                </button>
+            </form>
+        </section>
     </div>
-
-    <script>
-        // Theme toggle functionality (same as main page)
-        function toggleTheme() {
-            const body = document.body;
-            const themeToggle = document.getElementById('themeToggle');
-            const icon = themeToggle.querySelector('.icon');
-
-            const currentTheme = body.getAttribute('data-theme');
-
-            if (currentTheme === 'dark') {
-                body.removeAttribute('data-theme');
-                icon.textContent = '🌙';
-                localStorage.setItem('theme', 'light');
-            } else {
-                body.setAttribute('data-theme', 'dark');
-                icon.textContent = '☀️';
-                localStorage.setItem('theme', 'dark');
-            }
-        }
-
-        // Apply saved theme on page load
-        document.addEventListener('DOMContentLoaded', function () {
-            const savedTheme = localStorage.getItem('theme');
-            const themeToggle = document.getElementById('themeToggle');
-            const icon = themeToggle.querySelector('.icon');
-
-            if (savedTheme === 'dark') {
-                document.body.setAttribute('data-theme', 'dark');
-                icon.textContent = '☀️';
-            } else {
-                icon.textContent = '🌙';
-            }
-        });
-    </script>
-</body>
-
-</html>
+</main>
+{% endblock %}
