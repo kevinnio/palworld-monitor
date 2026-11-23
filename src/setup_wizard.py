@@ -186,6 +186,19 @@ def _default_config(exe_path, admin_pass, web_pass, use_lgsm=False):
     }
 
 
+def _strip_wrapping_quotes(path):
+    """Drop one pair of matching outer quotes from a user-typed path.
+
+    A path pasted from "Copy as path" or typed with quotes to survive spaces
+    arrives wrapped in them; stored verbatim it fails validation and the app
+    won't start. Quotes inside the path are left alone.
+    """
+    text = path.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        return text[1:-1].strip()
+    return text
+
+
 def interactive_setup(settings_path, detected_exe, use_lgsm=False):
     """First-run wizard: prompt for required settings and save settings.yaml."""
     print()
@@ -195,8 +208,8 @@ def interactive_setup(settings_path, detected_exe, use_lgsm=False):
     # Exe path
     if detected_exe:
         print(f"  Found PalServer at: {detected_exe}")
-        exe = input("  Press Enter to accept, or type a different path: ").strip()
-        exe = exe or detected_exe
+        exe = input("  Press Enter to accept, or type a different path: ")
+        exe = _strip_wrapping_quotes(exe) or detected_exe
     else:
         exe = ""
         prompt = (
@@ -205,7 +218,7 @@ def interactive_setup(settings_path, detected_exe, use_lgsm=False):
             else "  Path to PalServer.exe: "
         )
         while not exe:
-            exe = input(prompt).strip()
+            exe = _strip_wrapping_quotes(input(prompt))
 
     # Admin password
     existing_pass = read_palserver_admin_password(exe)

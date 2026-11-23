@@ -117,6 +117,51 @@ class TestInteractiveSetupLGSM:
         assert saved["palserver"]["useLGSM"] is True
         assert saved["palserver"]["exePath"] == exe_path
 
+    def test_quoted_exe_path_is_stored_unquoted(self, tmp_path, monkeypatch):
+        """A path pasted with wrapping quotes must not keep them (regression:
+        the quoted value failed validation and the app would not start)."""
+        exe_path = str(tmp_path / "PalServer" / "PalServer.exe")
+        settings_path = str(tmp_path / "settings.yaml")
+
+        answers = iter([f'"{exe_path}"', "adminpass123", "webpass123"])
+        mock_input = MagicMock(side_effect=lambda prompt: next(answers))
+        monkeypatch.setattr("builtins.input", mock_input)
+
+        interactive_setup(settings_path, detected_exe=None, use_lgsm=False)
+
+        with open(settings_path, "r") as f:
+            saved = yaml.safe_load(f)
+        assert saved["palserver"]["exePath"] == exe_path
+
+    def test_single_quoted_exe_path_is_stored_unquoted(self, tmp_path, monkeypatch):
+        exe_path = str(tmp_path / "PalServer" / "PalServer.exe")
+        settings_path = str(tmp_path / "settings.yaml")
+
+        answers = iter([f"'{exe_path}'", "adminpass123", "webpass123"])
+        mock_input = MagicMock(side_effect=lambda prompt: next(answers))
+        monkeypatch.setattr("builtins.input", mock_input)
+
+        interactive_setup(settings_path, detected_exe=None, use_lgsm=False)
+
+        with open(settings_path, "r") as f:
+            saved = yaml.safe_load(f)
+        assert saved["palserver"]["exePath"] == exe_path
+
+    def test_quoted_lgsm_script_is_stored_unquoted(self, tmp_path, monkeypatch):
+        """The LGSM branch shares the same cleaning: quotes are stripped too."""
+        script_path = str(tmp_path / "pwserver" / "pwserver")
+        settings_path = str(tmp_path / "settings.yaml")
+
+        answers = iter([f'"{script_path}"', "adminpass123", "webpass123"])
+        mock_input = MagicMock(side_effect=lambda prompt: next(answers))
+        monkeypatch.setattr("builtins.input", mock_input)
+
+        interactive_setup(settings_path, detected_exe=None, use_lgsm=True)
+
+        with open(settings_path, "r") as f:
+            saved = yaml.safe_load(f)
+        assert saved["palserver"]["exePath"] == script_path
+
     def test_default_prompts_for_palserver_exe(self, tmp_path, monkeypatch):
         exe_path = str(tmp_path / "PalServer" / "PalServer.exe")
         settings_path = str(tmp_path / "settings.yaml")
